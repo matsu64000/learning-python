@@ -3,14 +3,6 @@
 import csv
 
 
-def parse_sets(line):
-    sets = []
-    for part in line.split(","):
-        own_str, opp_str = part.split("-")
-        sets.append((int(own_str), int(opp_str)))
-    return sets
-
-
 # 全角数字 → 半角数字 の変換テーブル（表記ゆれの補正で使う）
 _ZEN_TO_HAN = str.maketrans("０１２３４５６７８９", "0123456789")
 
@@ -80,6 +72,12 @@ def classify_line(line):
 
 
 def input_matches():
+    """キーボードから対話的に試合結果を読み込む。
+
+    1セット入力するたびにその場で判定する。rejectedならエラーを伝えて
+    同じ行を再入力させ、correctedなら補正内容を伝えた上で採用する
+    （CSV側と同じclassify_lineを使い、判定ロジックは共通化している）。
+    """
     print("対戦相手の名前を入力してください（1行に1人、入力終了は空行）")
     opponents = []
     while True:
@@ -96,7 +94,17 @@ def input_matches():
             line = input(f"{opponent} 戦のスコア: ").strip()
             if line == "":
                 break
-            matches.append({"opponent": opponent, "sets": parse_sets(line)})
+
+            result = classify_line(line)
+            if result["status"] == "rejected":
+                print("入力エラー: " + "; ".join(result["notes"]))
+                print("もう一度入力してください")
+                continue
+
+            if result["status"] == "corrected":
+                print("補正して採用しました: " + "; ".join(result["notes"]))
+
+            matches.append({"opponent": opponent, "sets": result["sets"]})
 
     return matches
 
