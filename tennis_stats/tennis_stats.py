@@ -3,12 +3,29 @@
 import csv
 
 
-# 全角数字 → 半角数字 の変換テーブル（表記ゆれの補正で使う）
-_ZEN_TO_HAN = str.maketrans("０１２３４５６７８９", "0123456789")
+# 全角数字・各種ダッシュ記号 → 半角 の変換テーブル（表記ゆれの補正で使う）。
+# ダッシュはハイフンマイナス以外にも、全角ハイフンや日本語入力で紛れ込みやすい
+# 長音記号「ー」など、見た目が似ている文字を幅広く「-」に寄せる。
+_CHAR_FIXUPS = {
+    "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+    "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+    "－": "-",  # U+FF0D 全角ハイフンマイナス
+    "‐": "-",  # U+2010 HYPHEN
+    "‑": "-",  # U+2011 NON-BREAKING HYPHEN
+    "‒": "-",  # U+2012 FIGURE DASH
+    "–": "-",  # U+2013 EN DASH
+    "—": "-",  # U+2014 EM DASH
+    "―": "-",  # U+2015 HORIZONTAL BAR
+    "−": "-",  # U+2212 MINUS SIGN
+    "ー": "-",  # 長音記号（ハイフンと打ち間違えやすい）
+}
+_NORMALIZE_TABLE = str.maketrans(_CHAR_FIXUPS)
 
 
 def normalize_score_text(text):
-    return text.translate(_ZEN_TO_HAN)
+    """全角数字・各種ダッシュ記号を半角ハイフンに統一し、余分な空白を除去する"""
+    normalized = text.translate(_NORMALIZE_TABLE)
+    return "".join(ch for ch in normalized if not ch.isspace())
 
 
 def is_valid_set(own, opp):

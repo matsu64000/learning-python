@@ -7,6 +7,8 @@
 - input_matches_from_csv: 既存サンプルCSVでの回帰確認
 """
 
+from pathlib import Path
+
 import pytest
 
 from tennis_stats import (
@@ -15,6 +17,10 @@ from tennis_stats import (
     is_valid_set,
     parse_set_token,
 )
+
+# pytestをどのディレクトリから実行しても、このテストファイルと同じ場所にある
+# サンプルCSVを指せるように、__file__基準の絶対パスにしておく。
+DATA_DIR = Path(__file__).parent
 
 
 # --- is_valid_set: 境界値分析 -----------------------------------------
@@ -55,6 +61,32 @@ def test_parse_set_token_valid():
 
 def test_parse_set_token_corrected_zenkaku():
     status, own, opp, note = parse_set_token("６-３")
+    assert status == "corrected"
+    assert (own, opp) == (6, 3)
+    assert "6-3" in note
+
+
+@pytest.mark.parametrize("token", [
+    "6－3",   # 全角ハイフンマイナス(U+FF0D)
+    "6–3",    # ENダッシュ(U+2013)
+    "6—3",    # EMダッシュ(U+2014)
+    "6−3",    # マイナス記号(U+2212)
+    "6ー3",   # 長音記号(ハイフンと打ち間違えやすい)
+])
+def test_parse_set_token_corrected_dash_variants(token):
+    status, own, opp, note = parse_set_token(token)
+    assert status == "corrected"
+    assert (own, opp) == (6, 3)
+    assert "6-3" in note
+
+
+@pytest.mark.parametrize("token", [
+    "6 -3",
+    "6- 3",
+    "6 - 3",
+])
+def test_parse_set_token_corrected_internal_whitespace(token):
+    status, own, opp, note = parse_set_token(token)
     assert status == "corrected"
     assert (own, opp) == (6, 3)
     assert "6-3" in note
@@ -120,16 +152,16 @@ def test_classify_line_rejected_before_corrected_still_rejects():
 # --- input_matches_from_csv: 既存サンプルCSVでの回帰確認 -----------------
 
 def test_input_matches_from_csv_clean_sample_has_no_logs():
-    matches, corrected_log, rejected_log = input_matches_from_csv("sample_matches.csv")
+    matches, corrected_log, rejected_log = input_matches_from_csv(DATA_DIR / "sample_matches.csv")
     assert len(matches) > 0
     assert corrected_log == []
     assert rejected_log == []
 
 
 def test_input_matches_from_csv_dirty_sample_separates_corrected_and_rejected():
-    matches, corrected_log, rejected_log = input_matches_from_csv("sample_matches_dirty.csv")
+    matches, corrected_log, rejected_log = input_matches_from_csv(DATA_DIR / "sample_matches_dirty.csv")
     assert len(corrected_log) > 0
     assert len(rejected_log) > 0
     # rejectedにされた行は集計(matches)に含まれていないことを確認
     assert len(matches) + len(rejected_log) == sum(1 for _ in open(
-        "sample_matches_dirty.csv", encoding="utf-8-sig")) - 1  # ヘッダー分を引く
+        DATA_DIR / "sample_matches_dirty.csv", encoding="utf-8-sig")) - 1  # ヘッダー分を引く
