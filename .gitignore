@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .coverage
 .pytest_cache/
+image_practice/sample_image.png
