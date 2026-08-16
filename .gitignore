@@ -3,3 +3,4 @@ __pycache__/
 .coverage
 .pytest_cache/
 image_practice/sample_image.png
+image_practice/similarity_samples/
