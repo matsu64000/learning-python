@@ -9,7 +9,7 @@ import math
 import numpy as np
 from PIL import Image
 
-from feature_extraction import average_color
+from feature_extraction import average_color, to_grayscale_array
 
 OUTPUT_DIR = "similarity_samples"
 IMAGE_SIZE = 8  # 8x8ピクセルの正方形画像を作る
@@ -70,6 +70,15 @@ def std_color(array):
     return array.std(axis=(0, 1))
 
 
+def edge_energy(gray_array):
+    """グレースケール画像の縦横の隣接差分(絶対値)を合計し、模様の細かさ・境界の量を表す1つの数値にする。
+    単色なら0、境界が多い/急な模様ほど大きくなる(単純な隣接差分によるエッジ検出)。"""
+    gray_int = gray_array.astype(int)
+    horizontal_diff = np.abs(np.diff(gray_int, axis=1))
+    vertical_diff = np.abs(np.diff(gray_int, axis=0))
+    return float(horizontal_diff.sum() + vertical_diff.sum())
+
+
 def euclidean_distance(vec_a, vec_b):
     """3要素ベクトル同士のユークリッド距離"""
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(vec_a, vec_b)))
@@ -83,6 +92,7 @@ def main():
     whole_features = {}
     block_features = {}
     mean_std_features = {}
+    mean_std_edge_features = {}
     for filename, pixel_fn, description in IMAGE_DEFS:
         image = build_image(pixel_fn)
         path = os.path.join(OUTPUT_DIR, filename)
@@ -91,19 +101,22 @@ def main():
         array = np.array(image)
         avg = average_color(array)
         std = std_color(array)
+        edge = edge_energy(to_grayscale_array(image))
         whole_features[filename] = avg
         block_features[filename] = block_average_vector(array, BLOCK_GRID)
         mean_std_features[filename] = np.concatenate([avg, std])
+        mean_std_edge_features[filename] = np.concatenate([avg, std, [edge]])
         print(
             f"{filename:22s} 平均色=({avg[0]:6.1f}, {avg[1]:6.1f}, {avg[2]:6.1f})  "
-            f"標準偏差=({std[0]:5.1f}, {std[1]:5.1f}, {std[2]:5.1f})  {description}"
+            f"標準偏差=({std[0]:5.1f}, {std[1]:5.1f}, {std[2]:5.1f})  "
+            f"エッジ強度={edge:7.1f}  {description}"
         )
 
     print("\n--- 画像ペアごとのユークリッド距離(方式ごとの比較) ---")
     names = list(whole_features.keys())
     header = (
         f"{'画像A':22s} vs {'画像B':22s} {'全体平均':>10s} "
-        f"{'ブロック分割':>12s} {'平均+標準偏差':>14s}"
+        f"{'ブロック分割':>12s} {'平均+標準偏差':>14s} {'+エッジ強度':>12s}"
     )
     print(header)
     for i in range(len(names)):
@@ -112,9 +125,12 @@ def main():
             whole_dist = euclidean_distance(whole_features[a], whole_features[b])
             block_dist = euclidean_distance(block_features[a], block_features[b])
             mean_std_dist = euclidean_distance(mean_std_features[a], mean_std_features[b])
+            mean_std_edge_dist = euclidean_distance(
+                mean_std_edge_features[a], mean_std_edge_features[b]
+            )
             print(
                 f"{a:22s} vs {b:22s} {whole_dist:10.1f} "
-                f"{block_dist:12.1f} {mean_std_dist:14.1f}"
+                f"{block_dist:12.1f} {mean_std_dist:14.1f} {mean_std_edge_dist:12.1f}"
             )
 
 
