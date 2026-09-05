@@ -858,3 +858,31 @@ Python / AI駆動開発の学習記録。note記事の素材として、うま�
   今回の非課税限度額の境界を含む）
 - （継続、以前からの積み残し）TheSportsDBの件数制限の他リーグ確認、画像編のSobelフィルタ、
   テニス集計の各種テスト拡充
+
+---
+
+## 2026-09-05 続き（個人住民税: 境界値テストを追加）
+
+### やったこと
+- 前回予定の「境界値テスト追加」に着手。実装前に「境界値をどう決めているか」を
+  本人から質問されたため、tennis_stats(`is_valid_set`)と同じ考え方であることを
+  改めて言語化: コード中の比較演算子(`<=`等)がある箇所を境界とみなし、その
+  すぐ内側・すぐ外側をペアでテストする(間の値を増やしても検出力は上がらない)
+- 境界には性質が異なる2種類があると整理: ①コード中に定数がそのまま書いてある境界
+  （`calc_basic_deduction`の24,000,000円等、`classify_dependent`の16/19/23/70歳）は
+  条件式の数値をそのままペアにできる。②値自体が計算式から求まる境界
+  （前回追加した`calc_exemption_thresholds`/`judge_exemption_status`）は、
+  まず閾値を計算してからその値±1をペアにする必要がある、という違い
+- `resident_tax_practice/test_individual_resident_tax.py`を新規作成。
+  `calc_basic_deduction`(逓減3境界)、`classify_dependent`(年齢4境界+同居老親等の
+  同値クラス)、`calc_exemption_thresholds`/`judge_exemption_status`
+  (扶養0人は2つの限度額が一致し「所得割のみ非課税」の帯が消えるという構造上の
+  特殊ケースを含む)で計23件、全てパス
+- `calc_salary_deduction`(給与所得控除の5段階速算表)と`calc_adjustment_reduction`
+  (調整控除の2,000,000円境界)も同じ構造の境界を持つが、今回は範囲外として次回以降に
+  持ち越し
+
+### 次回予定
+- 個人住民税: `calc_salary_deduction`・`calc_adjustment_reduction`の境界値テスト追加
+- （継続、以前からの積み残し）TheSportsDBの件数制限の他リーグ確認、画像編のSobelフィルタ、
+  テニス集計の各種テスト拡充
