@@ -7,13 +7,17 @@
 #   - 税率(市6%・県4%)、均等割(市3,000円+県1,000円+森林環境税1,000円=5,000円)、
 #     基礎控除43万円の逓減、給与所得控除の速算表: 春日市・鎌ケ谷市の令和7年度住民税ページ
 #   - 扶養控除の区分別金額、調整控除の人的控除差額表、非課税限度額の算式: 狛江市の住民税ページ
+# 出典(2026-09-05時点でWebFetch/WebSearchにより確認):
+#   - 非課税限度額の算式(35万円×人数+10万円+21万円/32万円)、16歳未満扶養親族も
+#     人数に算入すること: 練馬区の令和7年度住民税ページ
 #
 # 【このプログラムのスコープ・既知の制約(判定ロジック層の対象外事項)】
 #   対象所得: 給与所得のみ(事業所得・不動産所得等は非対応)
 #   対象控除: 基礎控除・給与所得控除・社会保険料控除(実額)・扶養控除(人的)のみ
 #     -> 配偶者控除・配偶者特別控除、医療費控除、生命保険料控除などは非対応
-#   非課税限度額の判定: 非対応(本来は所得が一定以下なら均等割・所得割とも非課税になるが、
-#     ここでは常に課税される前提で計算する)
+#   非課税限度額の判定: 本人+扶養親族の人数のみで判定(同一生計配偶者は非対応のため
+#     人数に算入しない)。合計所得金額と総所得金額等は、給与所得のみを扱う本プログラムの
+#     スコープでは同額とみなして判定に用いている
 #   自治体独自の超過課税: 非対応(均等割は総務省の標準額のみを用いる。実際は自治体の条例で
 #     上乗せされることがある。例: 福岡県は森林環境税相当を県民税に500円上乗せしている)
 #   給与所得控除(収入660万円未満の区間): 所得税法別表第5(1,000円刻みの参照表)ではなく、
@@ -38,6 +42,12 @@ DEPENDENT_DEDUCTIONS = {
     "elderly": 380_000,             # 老人扶養親族(70歳以上)
     "elderly_cohabiting": 450_000,  # 同居老親等(70歳以上の直系尊属と同居)
 }
+
+# 非課税限度額の算式で使う定数(1人あたり加算額、扶養親族等がいる場合の加算額)
+EXEMPTION_AMOUNT_PER_PERSON = 350_000
+EXEMPTION_BASE_ADDITION = 100_000       # 基礎控除引き上げに伴う加算(扶養の有無を問わず一律)
+EXEMPTION_PER_CAPITA_ADDITION = 210_000  # 扶養親族等がいる場合のみ、均等割の非課税限度額に加算
+EXEMPTION_INCOME_ADDITION = 320_000      # 扶養親族等がいる場合のみ、所得割の非課税限度額に加算
 
 # 調整控除の計算に使う、所得税と住民税の人的控除額の差
 PERSONAL_DEDUCTION_DIFF = {
@@ -72,6 +82,38 @@ def classify_dependent(dependent):
     if 19 <= age <= 22:
         return "specific"
     return "general"  # 16〜18歳、23〜69歳
+
+
+def calc_exemption_thresholds(dependent_count):
+    """非課税限度額(均等割・所得割)を人数から求める。
+
+    扶養控除の対象人数(classify_dependentでNone=対象外を除いた数)とは別に、
+    ここでの人数には16歳未満の年少扶養親族も含める(扶養控除の対象外だが、
+    非課税限度額の判定では人数に算入する、という制度上の別ルール)。
+    同一生計配偶者は本プログラムでは非対応のため人数に含めない。
+    """
+    person_count = 1 + dependent_count  # 本人 + 扶養親族(年少含む)
+    base = EXEMPTION_AMOUNT_PER_PERSON * person_count + EXEMPTION_BASE_ADDITION
+    if dependent_count == 0:
+        return {"per_capita": base, "income": base}
+    return {
+        "per_capita": base + EXEMPTION_PER_CAPITA_ADDITION,
+        "income": base + EXEMPTION_INCOME_ADDITION,
+    }
+
+
+def judge_exemption_status(total_income, dependent_count):
+    """総所得金額等と扶養人数から非課税区分を判定する。
+
+    所得割の非課税限度額は均等割のそれより必ず高い(32万円>21万円加算)ため、
+    「両方課税」「所得割のみ非課税(均等割は課税)」「両方非課税」の3区分になる。
+    """
+    thresholds = calc_exemption_thresholds(dependent_count)
+    if total_income <= thresholds["per_capita"]:
+        return "exempt_both"
+    if total_income <= thresholds["income"]:
+        return "exempt_income_only"
+    return "taxable"
 
 
 def calc_salary_deduction(income):
@@ -147,8 +189,25 @@ def calculate_resident_tax(taxpayer):
         max(int(taxable_income * PREFECTURE_INCOME_TAX_RATE) - adjustment["prefecture"], 0) // 100 * 100
     )
 
-    per_capita_levy_total = CITY_PER_CAPITA_LEVY + PREFECTURE_PER_CAPITA_LEVY + FOREST_ENVIRONMENT_TAX
+    city_per_capita_levy = CITY_PER_CAPITA_LEVY
+    prefecture_per_capita_levy = PREFECTURE_PER_CAPITA_LEVY
+    forest_environment_tax = FOREST_ENVIRONMENT_TAX
+
+    # 非課税限度額の判定(人数には16歳未満の年少扶養親族も含める。classify_dependentの
+    # 対象人数=控除対象とは別カウント)。判定結果に応じて、算出済みの税額を非課税に上書きする
+    exemption_status = judge_exemption_status(total_income, len(taxpayer.dependents))
+    if exemption_status == "exempt_both":
+        city_income_levy = 0
+        prefecture_income_levy = 0
+        city_per_capita_levy = 0
+        prefecture_per_capita_levy = 0
+        forest_environment_tax = 0
+    elif exemption_status == "exempt_income_only":
+        city_income_levy = 0
+        prefecture_income_levy = 0
+
     income_levy_total = city_income_levy + prefecture_income_levy
+    per_capita_levy_total = city_per_capita_levy + prefecture_per_capita_levy + forest_environment_tax
     resident_tax_total = income_levy_total + per_capita_levy_total
 
     return {
@@ -157,17 +216,25 @@ def calculate_resident_tax(taxpayer):
         "basic_deduction": basic_deduction,
         "dependent_deduction": dependent_deduction,
         "income_deductions_total": income_deductions_total,
+        "exemption_status": exemption_status,
         "taxable_income": taxable_income,
         "adjustment_reduction": adjustment,
         "city_income_levy": city_income_levy,
         "prefecture_income_levy": prefecture_income_levy,
         "income_levy_total": income_levy_total,
-        "city_per_capita_levy": CITY_PER_CAPITA_LEVY,
-        "prefecture_per_capita_levy": PREFECTURE_PER_CAPITA_LEVY,
-        "forest_environment_tax": FOREST_ENVIRONMENT_TAX,
+        "city_per_capita_levy": city_per_capita_levy,
+        "prefecture_per_capita_levy": prefecture_per_capita_levy,
+        "forest_environment_tax": forest_environment_tax,
         "per_capita_levy_total": per_capita_levy_total,
         "resident_tax_total": resident_tax_total,
     }
+
+
+EXEMPTION_STATUS_LABELS = {
+    "exempt_both": "均等割・所得割とも非課税",
+    "exempt_income_only": "所得割のみ非課税(均等割は課税)",
+    "taxable": "課税(非課税限度額の対象外)",
+}
 
 
 def print_breakdown(title, taxpayer, result):
@@ -175,6 +242,7 @@ def print_breakdown(title, taxpayer, result):
     print(f"給与収入: {taxpayer.salary_income:,}円 / 社会保険料: {taxpayer.social_insurance_premium:,}円 "
           f"/ 扶養親族: {len(taxpayer.dependents)}人")
     print(f"給与所得控除: {result['salary_deduction']:,}円 -> 給与所得金額: {result['total_income']:,}円")
+    print(f"非課税判定: {EXEMPTION_STATUS_LABELS[result['exemption_status']]}")
     print(f"所得控除合計: {result['income_deductions_total']:,}円 "
           f"(基礎控除{result['basic_deduction']:,}円 + 社会保険料控除{taxpayer.social_insurance_premium:,}円 "
           f"+ 扶養控除{result['dependent_deduction']:,}円)")
@@ -201,6 +269,28 @@ def main():
         dependents=[Dependent(age=17), Dependent(age=20)],  # 一般扶養1人 + 特定扶養1人
     )
     print_breakdown("給与収入450万円・扶養2人(一般+特定)", with_dependents, calculate_resident_tax(with_dependents))
+
+    exempt_both = TaxpayerInput(
+        salary_income=1_000_000,
+        social_insurance_premium=50_000,
+        dependents=[],
+    )
+    print_breakdown(
+        "独身・給与収入100万円(非課税限度額ちょうど、両方非課税の境界)",
+        exempt_both,
+        calculate_resident_tax(exempt_both),
+    )
+
+    exempt_income_only = TaxpayerInput(
+        salary_income=1_700_000,
+        social_insurance_premium=100_000,
+        dependents=[Dependent(age=15)],  # 16歳未満: 扶養控除の対象外だが非課税判定の人数には算入
+    )
+    print_breakdown(
+        "給与収入170万円・扶養1人(15歳、所得割のみ非課税の境界)",
+        exempt_income_only,
+        calculate_resident_tax(exempt_income_only),
+    )
 
 
 if __name__ == "__main__":
