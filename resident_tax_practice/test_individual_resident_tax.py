@@ -5,14 +5,19 @@
 - classify_dependent: 年齢区分の境界(16/19/23/70歳)
 - calc_exemption_thresholds / judge_exemption_status: 計算式から求まる境界
   (定数ではなく、まず閾値を計算してからそのすぐ内側/外側をテストする)
+- calc_salary_deduction: 5段階速算表の境界(4箇所)
+- calc_adjustment_reduction: 定数境界(200万円)に加え、min()/max()が効き始める
+  境界(値同士の大小関係で決まる、コード中に定数として現れない境界)
 """
 
 import pytest
 
 from individual_resident_tax import (
     Dependent,
+    calc_adjustment_reduction,
     calc_basic_deduction,
     calc_exemption_thresholds,
+    calc_salary_deduction,
     classify_dependent,
     judge_exemption_status,
 )
@@ -81,3 +86,59 @@ def test_calc_exemption_thresholds_with_dependent():
 ])
 def test_judge_exemption_status_boundaries(total_income, dependent_count, expected):
     assert judge_exemption_status(total_income, dependent_count) == expected
+
+
+# --- calc_salary_deduction: 5段階速算表の境界(4箇所) -------------------------
+# 速算表は境界をまたいでも値が連続するように作られているため、境界のすぐ内側と
+# すぐ外側で同じ値になるペアが多い(設計として正しく連続していることの確認になる)。
+
+@pytest.mark.parametrize("income, expected", [
+    (1_625_000, 550_000),      # 定額控除の上限、すぐ内側
+    (1_625_001, 550_000),      # すぐ外側(速算式に切り替わるが値は連続)
+    (1_800_000, 620_000),      # 1段階目/2段階目の境界、すぐ内側
+    (1_800_001, 620_000),      # すぐ外側
+    (3_600_000, 1_160_000),    # 2段階目/3段階目の境界、すぐ内側
+    (3_600_001, 1_160_000),    # すぐ外側
+    (6_600_000, 1_760_000),    # 3段階目/4段階目の境界、すぐ内側
+    (6_600_001, 1_760_000),    # すぐ外側
+    (8_500_000, 1_950_000),    # 4段階目/上限の境界、すぐ内側
+    (8_500_001, 1_950_000),    # すぐ外側(以降は定額)
+])
+def test_calc_salary_deduction_boundaries(income, expected):
+    assert calc_salary_deduction(income) == expected
+
+
+# --- calc_adjustment_reduction ----------------------------------------------
+# 境界は3種類混在する:
+#   (a) コード中の定数境界: total_income=25,000,000円(対象外になる上限)、
+#       taxable_income=2,000,000円(計算式が切り替わる境界)
+#   (b) min()が効き始める境界: personal_deduction_diff_total と taxable_income の
+#       大小関係で決まる(定数としては現れない)
+#   (c) max(...,0)で0に張り付く境界: diff_total - (taxable_income - 2,000,000) の
+#       符号が変わる点(これも計算しないと分からない境界)
+
+@pytest.mark.parametrize(
+    "taxable_income, total_income, diff_total, expected",
+    [
+        # (a) total_income=25,000,000円の境界(taxable_income=1,000,000円で固定)
+        (1_000_000, 25_000_000, 500_000, {"city": 15_000, "prefecture": 10_000}),
+        (1_000_000, 25_000_001, 500_000, {"city": 0, "prefecture": 0}),
+        # (a) taxable_income=2,000,000円の境界(diff_total=400,000円で固定)
+        (2_000_000, 1_000_000, 400_000, {"city": 12_000, "prefecture": 8_000}),
+        (2_000_001, 1_000_000, 400_000, {"city": 11_999, "prefecture": 7_999}),
+        # (b) min(diff_total, taxable_income)が効き始める境界
+        #     (taxable_income=1,000,000円で固定、diff_totalを前後させる)
+        (1_000_000, 1_000_000, 999_999, {"city": 29_999, "prefecture": 19_999}),
+        (1_000_000, 1_000_000, 1_000_000, {"city": 30_000, "prefecture": 20_000}),
+        (1_000_000, 1_000_000, 1_000_001, {"city": 30_000, "prefecture": 20_000}),
+        # (c) max(...,0)で0に張り付く境界
+        #     (taxable_income=2,500,000円で固定、diff_total - 500,000円の符号が変わる点。
+        #     符号が変わった直後の値は//100の丸めで0と区別がつかないため、
+        #     floorが外れて実際に計算されることまで確認できる値を最後に置く)
+        (2_500_000, 1_000_000, 499_999, {"city": 0, "prefecture": 0}),   # 符号変化前(floorで0)
+        (2_500_000, 1_000_000, 500_000, {"city": 0, "prefecture": 0}),   # ちょうど境界(計算上も0)
+        (2_500_000, 1_000_000, 534_000, {"city": 1_020, "prefecture": 680}),  # floorが外れ計算値になる
+    ],
+)
+def test_calc_adjustment_reduction_boundaries(taxable_income, total_income, diff_total, expected):
+    assert calc_adjustment_reduction(taxable_income, total_income, diff_total) == expected
