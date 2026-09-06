@@ -58,6 +58,13 @@ PERSONAL_DEDUCTION_DIFF = {
     "elderly_cohabiting": 130_000,
 }
 
+# 寡婦控除・ひとり親控除の住民税上の控除額(まだcalculate_resident_taxには未統合)
+WIDOW_OR_SINGLE_PARENT_DEDUCTIONS = {
+    "single_parent": 300_000,
+    "widow": 260_000,
+}
+WIDOW_OR_SINGLE_PARENT_INCOME_LIMIT = 5_000_000  # 本人の合計所得金額の上限(両控除に共通)
+
 
 @dataclass
 class Dependent:
@@ -158,6 +165,56 @@ def calc_adjustment_reduction(taxable_income, total_income, personal_deduction_d
         "city": base * 3 // 100,
         "prefecture": base * 2 // 100,
     }
+
+
+def judge_widow_or_single_parent_deduction(
+    gender,
+    marital_status,
+    has_dependent_child,
+    has_other_dependent_relative,
+    total_income,
+    has_defacto_marriage_partner,
+):
+    """寡婦控除・ひとり親控除の適用区分("single_parent"/"widow"/"none")を判定する。
+
+    このプログラムでは未統合(calculate_resident_taxはまだ呼び出さない)。複合条件の
+    練習題材として判定ロジックのみ独立して実装・テストする。
+
+    引数の前提(このプログラムのスコープ、判定ロジックより手前で確定しているとみなす):
+      gender: "male" | "female"
+      marital_status: "divorced"(離婚) | "widowed"(死別。生死不明もここに含めて簡略化) |
+        "unmarried"(未婚。婚姻歴がない者。いずれも「現在婚姻していない」状態)
+      has_dependent_child: 生計を一にする子(総所得金額等48万円以下、他の者の扶養親族等に
+        なっていない)がいるか。子の所得・重複扶養の判定自体はこの関数の対象外
+      has_other_dependent_relative: 子に限らない扶養親族(寡婦控除(1)の要件)がいるか
+      total_income: 本人の合計所得金額(円)
+      has_defacto_marriage_partner: 住民票の続柄等から、事実上婚姻関係と同様の事情にある
+        者がいると認められるか
+
+    判定の骨格(独立要素をAND/ORで束ねた複合条件の例):
+      - 事実婚relevantな者がいる、または所得500万円超は、両控除とも問答無用でnone
+        (共通の除外条件。これがあると他の要素を見るまでもない)
+      - 子がいれば婚姻歴を問わずひとり親控除(未婚のひとり親も対象、という令和2年度改正の
+        趣旨がmarital_statusを分岐に使わない理由)
+      - ひとり親控除に該当しない場合のみ、寡婦控除を判定する(女性限定。死別なら扶養親族
+        不問、離婚なら他の扶養親族が必要という、marital_statusとhas_other_dependent_relative
+        の組み合わせ)
+    """
+    if has_defacto_marriage_partner:
+        return "none"
+    if total_income > WIDOW_OR_SINGLE_PARENT_INCOME_LIMIT:
+        return "none"
+
+    if has_dependent_child:
+        return "single_parent"
+
+    if gender != "female":
+        return "none"
+
+    is_widow = marital_status == "widowed" or (
+        marital_status == "divorced" and has_other_dependent_relative
+    )
+    return "widow" if is_widow else "none"
 
 
 def calculate_resident_tax(taxpayer):

@@ -20,6 +20,7 @@ from individual_resident_tax import (
     calc_salary_deduction,
     classify_dependent,
     judge_exemption_status,
+    judge_widow_or_single_parent_deduction,
 )
 
 
@@ -142,3 +143,138 @@ def test_calc_salary_deduction_boundaries(income, expected):
 )
 def test_calc_adjustment_reduction_boundaries(taxable_income, total_income, diff_total, expected):
     assert calc_adjustment_reduction(taxable_income, total_income, diff_total) == expected
+
+
+# --- judge_widow_or_single_parent_deduction: 決定表による削減 ---------------
+# 複合条件(独立した要素をAND/ORで束ねた判定)の練習題材。6要素の全組み合わせは
+# 2(性別)x3(婚姻状況)x2(子)x2(他の扶養親族)x2(所得500万円以下)x2(事実婚)=96通りだが、
+# 判定順序(早期リターンの順序)をそのまま行にした決定表で8行に削減できる。
+# "-"はdon't care(この行の結果に効かない要素)。判定順に意味があるので、上の行から
+# 順に「最初に一致した行」が採用される(COBOLのEVALUATE / WHEN OTHERと同じ考え方)。
+#
+#   Rule 事実婚 所得>500万 子あり 女性  婚姻状況  他扶養親族  結果            該当組合せ数
+#    1    Y      -         -     -     -         -          none            48
+#    2    N      Y         -     -     -         -          none            24
+#    3    N      N         Y     -     -         -          single_parent   12
+#    4    N      N         N     男    -         -          none             6
+#    5    N      N         N     女    死別      -          widow            2
+#    6    N      N         N     女    離婚      Y          widow            1
+#    7    N      N         N     女    離婚      N          none             1
+#    8    N      N         N     女    未婚      -          none             2
+#                                                            合計            96 (全組合せと一致)
+#
+# 各行の代表値は、don't careの部分にあえて「判定順が違っていたら別の結果になる値」を
+# 選ぶ(例: Rule1は事実婚以外を全て"single_parentになりそうな値"にしておき、事実婚の
+# 判定が本当に最優先で効くことまで確認する)。8/9のテニス集計で「rejectedがcorrectedより
+# 優先」を確認したのと同じ、優先順位のテストという考え方。
+
+@pytest.mark.parametrize(
+    "gender, marital_status, has_child, has_other_relative, total_income, has_defacto, expected",
+    [
+        # Rule1: 事実婚があれば、他が全てsingle_parent向きの値でもnone
+        ("female", "unmarried", True, True, 1_000_000, True, "none"),
+        # Rule2: 所得500万円超なら、他が全てsingle_parent向きの値でもnone
+        ("female", "divorced", True, True, 5_000_001, False, "none"),
+        # Rule3: 子がいれば、婚姻状況・他の扶養親族に関わらずsingle_parent
+        #        (女性・死別・他の扶養親族ありという、widowにもなり得そうな値を敢えて使う)
+        ("female", "widowed", True, True, 1_000_000, False, "single_parent"),
+        # Rule4: 男性なら、婚姻状況・他の扶養親族に関わらずnone(寡婦控除は女性のみ)
+        ("male", "widowed", False, True, 1_000_000, False, "none"),
+        # Rule5: 女性+死別なら、他の扶養親族に関わらずwidow(扶養親族不問)
+        ("female", "widowed", False, False, 1_000_000, False, "widow"),
+        # Rule6: 女性+離婚+他の扶養親族ありでwidow
+        ("female", "divorced", False, True, 1_000_000, False, "widow"),
+        # Rule7: 女性+離婚だが他の扶養親族なしはnone
+        ("female", "divorced", False, False, 1_000_000, False, "none"),
+        # Rule8: 女性+未婚は、他の扶養親族の有無に関わらずnone(離婚・死別のみが寡婦控除の対象)
+        ("female", "unmarried", False, True, 1_000_000, False, "none"),
+    ],
+)
+def test_judge_widow_or_single_parent_deduction_decision_table(
+    gender, marital_status, has_child, has_other_relative, total_income, has_defacto, expected
+):
+    result = judge_widow_or_single_parent_deduction(
+        gender, marital_status, has_child, has_other_relative, total_income, has_defacto
+    )
+    assert result == expected
+
+
+# --- judge_widow_or_single_parent_deduction: ペアワイズ ---------------------
+# 決定表と違い、判定ロジックの構造(優先順位)は使わず、「どの2要素の値の組み合わせも
+# 最低1回は登場させる」という機械的な基準だけで組む。6要素・レベル数(2,3,2,2,2,2)の
+# 全ペア数は70組。手作業では抜け漏れが起きやすいため、貪欲法(各行を追加するたびに
+# 「まだ被覆していないペアを一番多くカバーする組み合わせ」を選ぶ)で生成し、
+# 全ペアを被覆できているかをコードで検証した(pairwise_gen.py参照。理論上の下限は
+# 3値要素と2値要素の積である6行だが、貪欲法は最小性を保証しないため、この題材では
+# 8行になった)。
+# 決定表の8行とは異なる観点の8行になっている点に注目(例えば「男性+死別+子あり+
+# 事実婚あり」のように、決定表では1行にまとめられる要素同士の"意外な組み合わせ"を
+# 拾っている)。
+
+@pytest.mark.parametrize(
+    "gender, marital_status, has_child, has_other_relative, total_income, has_defacto, expected",
+    [
+        ("male", "divorced", False, False, 3_000_000, False, "none"),
+        ("male", "widowed", True, True, 5_500_000, True, "none"),
+        ("female", "unmarried", False, False, 5_500_000, True, "none"),
+        ("female", "unmarried", True, True, 3_000_000, False, "single_parent"),
+        ("female", "divorced", False, True, 3_000_000, True, "none"),
+        ("female", "widowed", False, False, 3_000_000, False, "widow"),
+        ("male", "divorced", True, False, 5_500_000, False, "none"),
+        ("male", "unmarried", False, False, 3_000_000, False, "none"),
+    ],
+)
+def test_judge_widow_or_single_parent_deduction_pairwise(
+    gender, marital_status, has_child, has_other_relative, total_income, has_defacto, expected
+):
+    result = judge_widow_or_single_parent_deduction(
+        gender, marital_status, has_child, has_other_relative, total_income, has_defacto
+    )
+    assert result == expected
+
+
+# --- judge_widow_or_single_parent_deduction: MC/DC --------------------------
+# 決定表・ペアワイズと違い、「その条件1つだけを変えたら結果が変わる」ペアを、
+# 5つの決定点それぞれについて作る。D1〜D4は単一条件の決定(if1個)なので、
+# ペアはそのままdon't careを埋めた2行で済む(実質、決定表の"優先順位を証明する
+# 意地悪な値"と同じもの)。D5だけが本当の複合条件:
+#   is_widow = (marital_status=="widowed") or (marital_status=="divorced" and has_other_relative)
+# ここではA=is_widowed, B=is_divorced, C=has_other_relativeの3条件に対して、
+# それぞれ単独の効果を示すペアを用意する。ただしAとBは同じmarital_status(3値)から
+# 導かれ両立しないため、理論上の最小N+1=4行では済まず、5行必要になる
+# (A/Bを独立な2つの真偽値として作れない、という制約がそのまま行数に表れる)。
+#
+# 決定点   ペアの意図                          行の組
+#  D1      事実婚あり/なしだけを変える          R1  / R2
+#  D2      所得500万円境界だけを変える          R2  / R3
+#  D3      子の有無だけを変える                R2  / R6
+#  D4      性別だけを変える(死別で意地悪に)     R7  / R8
+#  D5-A    死別/未婚だけを変える(他扶養親族=無)  R8  / RowQ
+#  D5-B    離婚/未婚だけを変える(他扶養親族=有)  RowR / R6
+#  D5-C    他扶養親族の有無だけを変える(離婚固定) RowR / RowU
+#
+# 7ペア・14行分の「単独条件の効果」を、行の使い回しにより9行で満たせる
+# (決定表・ペアワイズと同じく8行前後に収まり、件数だけ見ると差が小さいが、
+# 「なぜこの9行なのか」の説明力が全く違う)。
+
+@pytest.mark.parametrize(
+    "gender, marital_status, has_child, has_other_relative, total_income, has_defacto, expected",
+    [
+        ("female", "unmarried", True, True, 5_000_000, True, "none"),        # R1: D1=True
+        ("female", "unmarried", True, True, 5_000_000, False, "single_parent"),  # R2: D1=False(基準行)
+        ("female", "unmarried", True, True, 5_000_001, False, "none"),       # R3: D2=True(所得超過)
+        ("female", "unmarried", False, True, 5_000_000, False, "none"),      # R6: D3=False(子なし)
+        ("male", "widowed", False, False, 5_000_000, False, "none"),         # R7: D4=True(男性)
+        ("female", "widowed", False, False, 5_000_000, False, "widow"),      # R8: D4=False(女性)+D5-A
+        ("female", "unmarried", False, False, 5_000_000, False, "none"),     # RowQ: D5-A対
+        ("female", "divorced", False, True, 5_000_000, False, "widow"),      # RowR: D5-B/D5-C
+        ("female", "divorced", False, False, 5_000_000, False, "none"),      # RowU: D5-C対
+    ],
+)
+def test_judge_widow_or_single_parent_deduction_mcdc(
+    gender, marital_status, has_child, has_other_relative, total_income, has_defacto, expected
+):
+    result = judge_widow_or_single_parent_deduction(
+        gender, marital_status, has_child, has_other_relative, total_income, has_defacto
+    )
+    assert result == expected
