@@ -102,3 +102,53 @@ def plot_cumulative(series, heading_date, threshold_c, maturity_date, out_path):
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
+
+
+def plot_method_comparison(series_by_method, base_temp, location_label, out_path):
+    """単純平均法・BE法・実測平均法の積算気温を1つのグラフに重ねて描く。
+
+    series_by_method: {"単純平均法": series, "BE法": series, "実測平均法": series}
+      各seriesはdegree_days.cumulative_seriesの戻り値の形
+    """
+    colors = {
+        "単純平均法": COLOR_TEMP_MAX,   # slot2 orange
+        "BE法": COLOR_TEMP_MEAN,        # slot1 blue
+        "実測平均法": COLOR_TEMP_MIN,   # slot3 aqua
+    }
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    for label, series in series_by_method.items():
+        dates = [_to_date(row["date"]) for row in series]
+        values = [row["cumulative"] for row in series]
+        ax.plot(dates, values, color=colors[label], linewidth=2, solid_capstyle="round", label=label)
+
+    ax.set_ylabel(f"積算気温 (℃・日、基準{base_temp:.0f}℃)")
+    ax.set_title(f"{location_label} 積算気温の計算方法による違い")
+    ax.legend(loc="upper left", frameon=False)
+    ax.grid(True, color="#e1e0d9", linewidth=0.8)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_daily_divergence(series_a, series_b, label, straddling_dates, out_path):
+    """2手法の日々の差(series_a - series_b)を折れ線で描き、基準温度をまたいだ日を
+    縦の破線でマークする。「差がまたいだ日に集中しているか」を目で確認するための図。
+    """
+    dates = [_to_date(row["date"]) for row in series_a]
+    diff = [a["daily_value"] - b["daily_value"] for a, b in zip(series_a, series_b)]
+
+    fig, ax = plt.subplots(figsize=(11, 4))
+    ax.plot(dates, diff, color=COLOR_TEMP_MEAN, linewidth=1.5, solid_capstyle="round")
+    ax.axhline(0, color=COLOR_REFERENCE_LINE, linewidth=1)
+    for d in straddling_dates:
+        ax.axvline(_to_date(d), color=COLOR_REFERENCE_LINE, linestyle="--", linewidth=0.5, alpha=0.5)
+
+    ax.set_ylabel(f"1日ごとの差 ({label}, ℃・日)")
+    ax.set_title(f"{label}の日々の差(破線=基準温度をまたいだ日)")
+    ax.grid(True, color="#e1e0d9", linewidth=0.8)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
