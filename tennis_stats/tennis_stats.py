@@ -126,43 +126,55 @@ def input_matches():
     return matches
 
 
+def matches_from_csv_rows(rows):
+    """csv.DictReaderと同じ形(1行=opponent/setsを持つdict)のイテレータから、
+    試合結果を検証・分類する。
+
+    ファイルパスを直接受け取るinput_matches_from_csvと、Webアプリの
+    アップロードファイルのように既にテキストとして読み込み済みのデータの
+    両方から共通で使えるよう、「ファイルを開く処理」と「行を分類する処理」を分離した
+    （8/09に整理した「判定ロジックは入力元非依存」という原則を、ファイルI/O自体にも広げた形）
+    """
+    matches = []
+    corrected_log = []
+    rejected_log = []
+
+    for row_no, row in enumerate(rows, start=2):  # 1行目はヘッダーなので2から
+        result = classify_line(row["sets"])
+
+        if result["status"] == "rejected":
+            rejected_log.append({
+                "row": row_no,
+                "opponent": row["opponent"],
+                "raw": row["sets"],
+                "notes": result["notes"],
+            })
+            continue
+
+        if result["status"] == "corrected":
+            corrected_log.append({
+                "row": row_no,
+                "opponent": row["opponent"],
+                "raw": row["sets"],
+                "notes": result["notes"],
+            })
+
+        matches.append({"opponent": row["opponent"], "sets": result["sets"]})
+
+    return matches, corrected_log, rejected_log
+
+
 def input_matches_from_csv(filepath):
-    """CSVから試合結果を読み込む。
+    """CSVファイルから試合結果を読み込む。
 
     妥当なスコアだけでなく、全角数字などの表記ゆれは補正して採用し、
     存在しないスコア等は却下して集計対象から外す（隔離）。
     補正・却下したデータは corrected_log / rejected_log に記録し、
     元の生データ（raw）を残すことで、あとから内容を追えるようにする。
     """
-    matches = []
-    corrected_log = []
-    rejected_log = []
-
     with open(filepath, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
-        for row_no, row in enumerate(reader, start=2):  # 1行目はヘッダーなので2から
-            result = classify_line(row["sets"])
-
-            if result["status"] == "rejected":
-                rejected_log.append({
-                    "row": row_no,
-                    "opponent": row["opponent"],
-                    "raw": row["sets"],
-                    "notes": result["notes"],
-                })
-                continue
-
-            if result["status"] == "corrected":
-                corrected_log.append({
-                    "row": row_no,
-                    "opponent": row["opponent"],
-                    "raw": row["sets"],
-                    "notes": result["notes"],
-                })
-
-            matches.append({"opponent": row["opponent"], "sets": result["sets"]})
-
-    return matches, corrected_log, rejected_log
+        return matches_from_csv_rows(reader)
 
 
 def did_win(match):
