@@ -10,7 +10,13 @@ import math
 
 import pytest
 
-from degree_days import simple_average_dd, sine_curve_temperature, single_sine_dd, true_mean_dd
+from degree_days import (
+    hourly_integrated_dd,
+    simple_average_dd,
+    sine_curve_temperature,
+    single_sine_dd,
+    true_mean_dd,
+)
 
 
 def _numeric_integration_dd(temp_max, temp_min, base_temp, steps=200_000):
@@ -111,3 +117,44 @@ def test_true_mean_dd_clips_negative_to_zero():
 
 def test_true_mean_dd_subtracts_base():
     assert true_mean_dd(temp_mean=15.0, base_temp=10.0) == 5.0
+
+
+# --- hourly_integrated_dd ----------------------------------------------------------
+
+def test_hourly_integrated_whole_day_above_base_matches_true_mean():
+    # 1日中基準以上なら、クリップは一度も発生しないのでtrue_mean_ddと厳密に一致する
+    temps = [15.0] * 24
+    assert hourly_integrated_dd(temps, base_temp=10.0) == pytest.approx(5.0)
+
+
+def test_hourly_integrated_whole_day_below_base_is_zero():
+    temps = [5.0] * 24
+    assert hourly_integrated_dd(temps, base_temp=10.0) == 0.0
+
+
+def test_hourly_integrated_straddling_day_hand_calculation():
+    # 12時間が15度(基準+5)・12時間が5度(基準-5、クリップで0)の日
+    temps = [15.0] * 12 + [5.0] * 12
+    assert hourly_integrated_dd(temps, base_temp=10.0) == pytest.approx(2.5)
+
+
+def test_hourly_integrated_is_never_less_than_true_mean_when_straddling():
+    """diurnal_shape.pyで実データから発見した性質: hourly_integrated_ddは、同じ24点の
+    平均から出したtrue_mean_ddを下回らない。
+
+    single_sine_dd >= simple_average_dd と全く同じJensenの不等式の構造
+    (E[max(0,x)] >= max(0,E[x])) を、正弦波近似ではなく生の24点に対して適用した形。
+    「先にクリップしてから平均する(hourly_integrated_dd)」方が
+    「先に平均してからクリップする(true_mean_dd)」より必ず大きいか等しい
+    """
+    cases = [
+        [15.0] * 12 + [5.0] * 12,           # ちょうど半々でまたぐ
+        [20.0] * 6 + [5.0] * 18,            # 少数の時間だけ高温
+        [12.0, 8.0, 11.0, 9.0, 13.0, 7.0] * 4,  # 細かく上下する日
+        [20.0] * 24,                         # 非またぎ(境界チェックも兼ねる)
+    ]
+    for temps in cases:
+        mean_temp = sum(temps) / len(temps)
+        true_mean = true_mean_dd(mean_temp, base_temp=10.0)
+        hourly = hourly_integrated_dd(temps, base_temp=10.0)
+        assert hourly >= true_mean - 1e-9, (temps, true_mean, hourly)

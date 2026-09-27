@@ -66,6 +66,20 @@ def true_mean_dd(temp_mean, base_temp):
     return max(0.0, temp_mean - base_temp)
 
 
+def hourly_integrated_dd(hourly_temps, base_temp):
+    """1時間ごとの実測相当気温(1日24点)から、熱量を直接積算する"最も正確な"方法。
+
+    single_sine_dd/simple_average_dd は「最高・最低の2値だけから1日の気温変化を
+    推測する」近似だが、ここでは実際の24点をそのまま使い、1時間ごとに
+    max(0, その時刻の気温 - base_temp) を計算してから平均する(等間隔サンプルの
+    単純平均は、24点による台形則の近似と同じ)。true_mean_dd は「先に1日分を平均
+    してから基準を引く」のに対し、この関数は「先に時間ごとに基準を引いて0で
+    クリップし、後で平均する」順序が違う。基準温度を1日のうちにまたぐ日では、
+    この順序の違いがJensenの不等式により結果の差として表れる
+    """
+    return sum(max(0.0, t - base_temp) for t in hourly_temps) / len(hourly_temps)
+
+
 def sine_curve_temperature(hour, temp_max, temp_min):
     """正弦波近似での、hour時(0〜24)における気温。単体テストの数値積分検証用。"""
     mean = (temp_max + temp_min) / 2

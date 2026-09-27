@@ -75,12 +75,48 @@ def fetch_daily_weather(latitude, longitude, start_date, end_date, timezone="Asi
     ]
 
 
+def fetch_hourly_temperature(latitude, longitude, start_date, end_date, timezone="Asia/Tokyo"):
+    """指定した地点・期間の1時間ごとの気温を取得する。
+
+    返り値: 日付ごとにグルーピングされた辞書。キーは"YYYY-MM-DD"、値はその日の
+    0時〜23時、24個のfloat(欠測がなければ)のlist。degree_days.pyで
+    「最高・最低の2値からの近似」と「24点の実測相当値」を比較する際の
+    "正解"として使う
+    """
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "start_date": start_date,
+        "end_date": end_date,
+        "hourly": "temperature_2m",
+        "timezone": timezone,
+    }
+    response = requests.get(ARCHIVE_API_URL, params=params, timeout=30)
+    response.raise_for_status()
+    payload = response.json()
+
+    if payload.get("error"):
+        raise ValueError(f"Open-Meteo APIがエラーを返しました: {payload.get('reason')}")
+
+    hourly = payload["hourly"]
+    by_date = {}
+    for timestamp, temperature in zip(hourly["time"], hourly["temperature_2m"]):
+        day = timestamp[:10]  # "2025-07-15T00:00" -> "2025-07-15"
+        by_date.setdefault(day, []).append(temperature)
+    return by_date
+
+
 def main():
     # 南魚沼市役所の緯度経度
     latitude, longitude = 37.0655, 138.8760
     data = fetch_daily_weather(latitude, longitude, "2025-05-01", "2025-05-05")
     for row in data:
         print(row)
+
+    print()
+    hourly = fetch_hourly_temperature(latitude, longitude, "2025-07-15", "2025-07-15")
+    for day, temps in hourly.items():
+        print(day, temps)
 
 
 if __name__ == "__main__":

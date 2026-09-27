@@ -24,6 +24,7 @@ COLOR_TEMP_MEAN = "#2a78d6"   # slot1 blue
 COLOR_TEMP_MIN = "#1baf7a"    # slot3 aqua
 COLOR_PRECIPITATION = "#86b6ef"  # 青の連続スケールの薄い段(降水量は補助系列)
 COLOR_REFERENCE_LINE = "#898781"  # 田植え/出穂/収穫適期などの節目線(ミュートなインク)
+COLOR_TRUTH = "#eda100"  # slot4 yellow(時間別積算法など、新たに加わった"正解"系列用)
 
 
 def _to_date(date_str):
@@ -111,19 +112,47 @@ def plot_method_comparison(series_by_method, base_temp, location_label, out_path
       各seriesはdegree_days.cumulative_seriesの戻り値の形
     """
     colors = {
-        "単純平均法": COLOR_TEMP_MAX,   # slot2 orange
-        "BE法": COLOR_TEMP_MEAN,        # slot1 blue
-        "実測平均法": COLOR_TEMP_MIN,   # slot3 aqua
+        "単純平均法": COLOR_TEMP_MAX,        # slot2 orange
+        "BE法": COLOR_TEMP_MEAN,             # slot1 blue
+        "実測平均法": COLOR_TEMP_MIN,        # slot3 aqua
+        "時間別積算法(正解)": COLOR_TRUTH,   # slot4 yellow
     }
 
     fig, ax = plt.subplots(figsize=(11, 5))
     for label, series in series_by_method.items():
         dates = [_to_date(row["date"]) for row in series]
         values = [row["cumulative"] for row in series]
-        ax.plot(dates, values, color=colors[label], linewidth=2, solid_capstyle="round", label=label)
+        style = dict(linewidth=2.5, linestyle="--") if label == "時間別積算法(正解)" else dict(linewidth=2)
+        ax.plot(dates, values, color=colors[label], solid_capstyle="round", label=label, **style)
 
     ax.set_ylabel(f"積算気温 (℃・日、基準{base_temp:.0f}℃)")
     ax.set_title(f"{location_label} 積算気温の計算方法による違い")
+    ax.legend(loc="upper left", frameon=False)
+    ax.grid(True, color="#e1e0d9", linewidth=0.8)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_diurnal_shape(real_shape, sine_shape, location_label, out_path):
+    """典型的な1日の気温カーブの形を、実測(時間別データの平均)とBE法が仮定する
+    正弦波とで重ねて描く。どちらも「その日の平均気温からのズレ」なので、
+    縦軸はどちらも0を中心に対称なスケールになる
+    """
+    hours = sorted(real_shape.keys())
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.plot(hours, [real_shape[h] for h in hours], color=COLOR_TEMP_MEAN,
+            linewidth=2.5, solid_capstyle="round", marker="o", markersize=4, label="実測(時間別データの平均)")
+    ax.plot(hours, [sine_shape[h] for h in hours], color=COLOR_TEMP_MAX,
+            linewidth=2, linestyle="--", label="BE法が仮定する正弦波")
+    ax.axhline(0, color=COLOR_REFERENCE_LINE, linewidth=1)
+
+    ax.set_xlabel("時刻")
+    ax.set_ylabel("その日の平均気温からのズレ (℃)")
+    ax.set_title(f"{location_label} 典型的な1日の気温カーブの形(season平均)")
+    ax.set_xticks(range(0, 24, 3))
     ax.legend(loc="upper left", frameon=False)
     ax.grid(True, color="#e1e0d9", linewidth=0.8)
 
