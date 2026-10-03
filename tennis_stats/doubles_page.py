@@ -8,14 +8,16 @@
 # 【状態遷移】st.session_stateで3段階を管理する:
 #   1. 登録中(doubles_current is None かつ doubles_history が空) : プレイヤー登録を受け付ける
 #   2. 進行中(doubles_finished が False) : 対戦カードの提示→結果入力の繰り返し。
-#      1試合終わるたびに「次の対戦を組む」か「ここで終了する」かを選べる
+#      結果を登録すると、すぐに次の対戦カードを自動で表示する(2026-10-03変更)。
+#      「ここで終了する」ボタンはいつでも押せ、押すとその時点の対戦カードは破棄する
 #   3. 終了(doubles_finished が True) : 最終の個人成績だけを表示する
 
 import pandas as pd
 import streamlit as st
 
 from doubles import generate_matchup, player_summary
-from tennis_stats import classify_line
+from score_input import score_inputs, set_count_selector
+from tennis_stats import classify_sets
 
 st.set_page_config(page_title="ダブルス対戦", page_icon="🎾")
 st.title("🎾 ダブルス対戦")
@@ -57,53 +59,63 @@ else:
             st.rerun()
 
 # --- 2. 対戦の進行 ------------------------------------------------------------
+def _next_matchup():
+    st.session_state.doubles_current = generate_matchup(
+        st.session_state.doubles_players, st.session_state.doubles_history,
+    )
+
+
 if not st.session_state.doubles_finished:
     if len(st.session_state.doubles_players) < 4:
         st.info("ダブルスには4人以上の登録が必要です")
+    elif not started:
+        if st.button("対戦を開始する", type="primary", width="stretch"):
+            _next_matchup()
+            st.rerun()
     else:
-        st.header("対戦")
+        round_no = len(st.session_state.doubles_history) + 1
+        st.header(f"第{round_no}試合")
 
-        if st.session_state.doubles_current is None:
-            col1, col2 = st.columns(2)
-            if col1.button("次の対戦を組む", type="primary"):
-                st.session_state.doubles_current = generate_matchup(
-                    st.session_state.doubles_players, st.session_state.doubles_history,
-                )
+        matchup = st.session_state.doubles_current
+        st.subheader(f"{'・'.join(matchup['team_a'])}  vs  {'・'.join(matchup['team_b'])}")
+        if matchup["resting"]:
+            st.caption("休み: " + "、".join(matchup["resting"]))
+
+        set_count = set_count_selector(key="doubles_set_count")
+        with st.form("score_form"):
+            sets = score_inputs(
+                set_count, "・".join(matchup["team_a"]), "・".join(matchup["team_b"]),
+                # 試合ごとに別の key にして、前の試合の入力値を持ち越さない
+                key=f"doubles_{len(st.session_state.doubles_history)}",
+            )
+            submitted = st.form_submit_button(
+                "結果を登録して次の試合へ", type="primary", width="stretch",
+            )
+
+        if submitted:
+            result = classify_sets(sets)
+            if result["status"] == "rejected":
+                st.error("登録できませんでした: " + "; ".join(result["notes"]))
+            else:
+                st.session_state.doubles_history.append({
+                    "team_a": matchup["team_a"],
+                    "team_b": matchup["team_b"],
+                    "resting": matchup["resting"],
+                    "sets": result["sets"],
+                })
+                _next_matchup()
                 st.rerun()
-            if col2.button("ここで終了する"):
-                st.session_state.doubles_finished = True
-                st.rerun()
-        else:
-            matchup = st.session_state.doubles_current
-            st.subheader(f"{'・'.join(matchup['team_a'])}  vs  {'・'.join(matchup['team_b'])}")
-            if matchup["resting"]:
-                st.caption("休み: " + "、".join(matchup["resting"]))
 
-            with st.form("score_form"):
-                sets_text = st.text_input(
-                    f"セット結果（{'・'.join(matchup['team_a'])}側の視点、例: 6-3,4-6,6-2）"
-                )
-                submitted = st.form_submit_button("試合結果を登録")
-
-            if submitted:
-                result = classify_line(sets_text)
-                if result["status"] == "rejected":
-                    st.error("登録できませんでした: " + "; ".join(result["notes"]))
-                else:
-                    if result["status"] == "corrected":
-                        st.warning("補正して登録しました: " + "; ".join(result["notes"]))
-                    st.session_state.doubles_history.append({
-                        "team_a": matchup["team_a"],
-                        "team_b": matchup["team_b"],
-                        "resting": matchup["resting"],
-                        "sets": result["sets"],
-                    })
-                    st.session_state.doubles_current = None
-                    st.rerun()
+        st.divider()
+        if st.button("ここで終了して成績を見る", width="stretch"):
+            st.session_state.doubles_current = None
+            st.session_state.doubles_finished = True
+            st.rerun()
 else:
     st.success("対戦を終了しました")
 
 # --- 3. 個人成績 ---------------------------------------------------------------
+# 並び順は 勝ち数 → セット差 の多い順。表の列が多いので、スマホでは横スクロールになる
 if st.session_state.doubles_history:
     heading = "個人成績（最終結果）" if st.session_state.doubles_finished else "個人成績（ここまでの成績）"
     st.header(heading)
@@ -112,16 +124,22 @@ if st.session_state.doubles_history:
     table = pd.DataFrame([
         {
             "プレイヤー": p,
-            "対戦数": s["matches_played"],
+            "試合": s["matches_played"],
+            "勝": s["wins"],
+            "負": s["losses"],
+            "分": s["draws"],
+            "得セット": s["sets_won"],
+            "失セット": s["sets_lost"],
+            "セット差": s["set_diff"],
             "勝率": s["win_rate"],
             "ゲーム獲得率": s["game_win_rate"],
         }
         for p, s in summary.items()
-    ]).sort_values("勝率", ascending=False)
+    ]).sort_values(["勝", "セット差"], ascending=False)
 
     st.dataframe(
-        table.style.format({"勝率": "{:.1%}", "ゲーム獲得率": "{:.1%}"}),
-        use_container_width=True, hide_index=True,
+        table.style.format({"セット差": "{:+d}", "勝率": "{:.1%}", "ゲーム獲得率": "{:.1%}"}),
+        width="stretch", hide_index=True,
     )
 
     with st.expander(f"対戦履歴（{len(st.session_state.doubles_history)}試合）"):

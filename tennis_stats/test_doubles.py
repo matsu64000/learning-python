@@ -10,13 +10,20 @@ import random
 
 import pytest
 
+from itertools import combinations
+
 from doubles import (
     _partitions_of_four,
+    candidate_groups,
+    card_history,
+    card_key,
     generate_matchup,
     matches_played_count,
+    matchup_cost,
+    opponent_counts,
+    pair_counts,
     player_matches,
     player_summary,
-    select_players_for_round,
 )
 
 
@@ -31,28 +38,108 @@ def test_matches_played_count_counts_each_appearance():
     assert counts == {"A": 2, "B": 2, "C": 2, "D": 2, "E": 0}
 
 
-# --- select_players_for_round ----------------------------------------------------
+# --- candidate_groups --------------------------------------------------------------
 
-def test_select_players_for_round_picks_least_played_four():
-    # E, Fは2回ずつ対戦済み、A-Dは1回ずつ → 対戦数が少ないA-Dが選ばれるはず
+def test_candidate_groups_least_played_must_play():
+    # A,B,Cは1回、D,E,Fは2回 → A,B,Cは必ず出て、残り1人がD,E,Fのいずれか
+    history = [
+        {"team_a": ("D", "E"), "team_b": ("A", "B"), "sets": []},
+        {"team_a": ("D", "F"), "team_b": ("E", "C"), "sets": []},
+        {"team_a": ("F", "X"), "team_b": ("Y", "Z"), "sets": []},
+    ]
+    players = ["A", "B", "C", "D", "E", "F", "X", "Y", "Z"]
+    # X,Y,Zも1回ずつ → 1回の人はA,B,C,X,Y,Zの6人で、4人を選ぶ組は C(6,4)=15通り
+    groups = candidate_groups(players, history)
+    assert len(groups) == 15
+    for g in groups:
+        assert len(g) == 4
+        assert not set(g) & {"D", "E", "F"}
+
+
+def test_candidate_groups_fills_from_tied_players():
     history = [
         {"team_a": ("E", "F"), "team_b": ("A", "B"), "sets": []},
         {"team_a": ("E", "F"), "team_b": ("C", "D"), "sets": []},
     ]
-    result = select_players_for_round(["A", "B", "C", "D", "E", "F"], history)
-    assert set(result) == {"A", "B", "C", "D"}
+    # A-Dは1回、E,Fは2回、Gは0回 → Gは必ず出て、残り3人をA-Dの4人から選ぶ(4通り)
+    groups = candidate_groups(["A", "B", "C", "D", "E", "F", "G"], history)
+    assert len(groups) == 4
+    for g in groups:
+        assert "G" in g
+        assert not set(g) & {"E", "F"}
 
 
-def test_select_players_for_round_breaks_ties_randomly():
-    # 5人全員が対戦数0(完全に同数)のとき、複数回実行すれば「休む1人」は
-    # 統計的に色々な人になるはず(常に同じ人が休むなら公平とは言えない)
-    players = ["A", "B", "C", "D", "E"]
-    resting_people_seen = set()
-    for seed in range(200):
-        chosen = select_players_for_round(players, [], rng=random.Random(seed))
-        resting = set(players) - set(chosen)
-        resting_people_seen |= resting
-    assert resting_people_seen == set(players)
+def test_candidate_groups_everyone_tied():
+    # 5人全員0回 → 5人から4人を選ぶ5通りすべてが候補
+    groups = candidate_groups(["A", "B", "C", "D", "E"], [])
+    assert len(groups) == 5
+
+
+# --- pair_counts / opponent_counts / matchup_cost ----------------------------------
+
+HISTORY_2 = [
+    {"team_a": ("A", "B"), "team_b": ("C", "D"), "sets": []},
+    {"team_a": ("A", "C"), "team_b": ("B", "D"), "sets": []},
+]
+
+
+def test_pair_counts():
+    pairs = pair_counts(HISTORY_2)
+    assert pairs[frozenset(("A", "B"))] == 1
+    assert pairs[frozenset(("B", "D"))] == 1
+    assert pairs[frozenset(("A", "D"))] == 0
+
+
+def test_opponent_counts():
+    # 1試合目の対戦: A-C, A-D, B-C, B-D / 2試合目: A-B, A-D, C-B, C-D
+    opponents = opponent_counts(HISTORY_2)
+    assert opponents[frozenset(("A", "D"))] == 2
+    assert opponents[frozenset(("B", "C"))] == 2
+    assert opponents[frozenset(("A", "C"))] == 1
+    assert opponents[frozenset(("A", "B"))] == 1
+
+
+def test_matchup_cost_hand_calculation():
+    pairs, opponents = pair_counts(HISTORY_2), opponent_counts(HISTORY_2)
+    cards = card_history(HISTORY_2)
+    # A・D vs B・C: ペアはどちらも初 → 0。対戦はA-B(1)+A-C(1)+D-B(1)+D-C(1) = 4
+    # カードとしては未登場 → 回数0, 最後に出た番号-1
+    assert matchup_cost(("A", "D"), ("B", "C"), pairs, opponents, cards) == (0, 4, 0, -1)
+    # A・B vs C・D: ペアA・B(1)+C・D(1) = 2。対戦A-C(1)+A-D(2)+B-C(2)+B-D(1) = 6
+    # カードとしては1試合目(番号0)に1回登場
+    assert matchup_cost(("C", "D"), ("B", "A"), pairs, opponents, cards) == (2, 6, 1, 0)
+
+
+def test_matchup_cost_pair_has_priority_over_opponent():
+    # 「ペアの重複0・対戦相手の重複が多い」ほうが「ペアの重複1・対戦相手の重複0」より
+    # 良い(小さい)と判定されること = ペアの重複を優先して避ける
+    assert (0, 4) < (1, 0)
+
+
+def test_card_history_counts_and_last_seen():
+    history = HISTORY_2 + [{"team_a": ("D", "C"), "team_b": ("B", "A"), "sets": []}]
+    cards = card_history(history)
+    # 1試合目と3試合目は、チームの順序・名前の並びが違うだけで同じカード
+    assert cards[card_key(("A", "B"), ("C", "D"))] == (2, 2)
+    assert cards[card_key(("A", "C"), ("B", "D"))] == (1, 1)
+    assert card_key(("A", "D"), ("B", "C")) not in cards
+
+
+@pytest.mark.parametrize("num_players", [4, 5, 6, 8])
+def test_generate_matchup_never_repeats_previous_card(num_players):
+    # 4人では3通りのカードしかないので2周目以降は同じカードが必ず再登場するが、
+    # 直前と同じカードが続くことはない(最後に出たのが昔のカードを優先するため)
+    players = [chr(ord("A") + i) for i in range(num_players)]
+    for seed in range(20):
+        rng = random.Random(seed)
+        history = []
+        for _ in range(15):
+            result = generate_matchup(players, history, rng=rng)
+            if history:
+                previous = history[-1]
+                assert card_key(result["team_a"], result["team_b"]) != card_key(
+                    previous["team_a"], previous["team_b"])
+            history.append({**result, "sets": [(6, 3)]})
 
 
 # --- _partitions_of_four ----------------------------------------------------------
@@ -113,6 +200,59 @@ def test_generate_matchup_can_produce_both_remaining_partitions_over_many_trials
     assert len(seen_partitions) == 2
 
 
+def test_generate_matchup_avoids_repeated_pairs_with_four_players():
+    # 4人でA・B, C・D, A・C, B・Dと組んだ後は、まだ組んでいないA・D と B・C しかない
+    for seed in range(20):
+        result = generate_matchup(["A", "B", "C", "D"], HISTORY_2, rng=random.Random(seed))
+        assert {frozenset(result["team_a"]), frozenset(result["team_b"])} == {
+            frozenset(("A", "D")), frozenset(("B", "C")),
+        }
+
+
+def test_generate_matchup_always_picks_minimum_cost():
+    # 6人でランダムに10試合進める間、毎回「候補の中で最も重複が少ない」ものを選んでいるか、
+    # 全候補を総当たりで計算した最小値と照合する
+    players = ["A", "B", "C", "D", "E", "F"]
+    rng = random.Random(1)
+    history = []
+    for _ in range(10):
+        pairs, opponents = pair_counts(history), opponent_counts(history)
+        cards = card_history(history)
+        all_costs = [
+            matchup_cost(a, b, pairs, opponents, cards)
+            for g in candidate_groups(players, history)
+            for a, b in _partitions_of_four(g)
+        ]
+        result = generate_matchup(players, history, rng=rng)
+        assert matchup_cost(result["team_a"], result["team_b"], pairs, opponents, cards) == min(all_costs)
+        history.append({**result, "sets": [(6, 3)]})
+
+
+@pytest.mark.parametrize("num_players, rounds", [(5, 5), (6, 9), (8, 14)])
+def test_generate_matchup_keeps_match_counts_equal(num_players, rounds):
+    # 人数×試合数が割り切れる設定なら、全員がちょうど同じ試合数になる
+    players = [chr(ord("A") + i) for i in range(num_players)]
+    for seed in range(20):
+        rng = random.Random(seed)
+        history = []
+        for _ in range(rounds):
+            history.append({**generate_matchup(players, history, rng=rng), "sets": [(6, 3)]})
+        counts = matches_played_count(players, history)
+        assert len(set(counts.values())) == 1
+
+
+def test_generate_matchup_eight_players_fourteen_rounds_every_pair_once():
+    # 8人なら全28ペアが14試合(28枠)でちょうど1回ずつ組める
+    players = [chr(ord("A") + i) for i in range(8)]
+    for seed in range(20):
+        rng = random.Random(seed)
+        history = []
+        for _ in range(14):
+            history.append({**generate_matchup(players, history, rng=rng), "sets": [(6, 3)]})
+        pairs = pair_counts(history)
+        assert all(pairs[frozenset(pr)] == 1 for pr in combinations(players, 2))
+
+
 # --- player_matches / player_summary ------------------------------------------------
 
 def test_player_matches_keeps_perspective_for_team_a_player():
@@ -161,3 +301,26 @@ def test_player_summary_matches_hand_calculation():
     # 2試合目(A・C視点) own=4+6+6=16, all=(4+6)+(6+2)+(6+2)=26
     # 合計 own=12+16=28, all=19+26=45
     assert summary["A"]["game_win_rate"] == pytest.approx(28 / 45)
+
+
+def test_player_summary_wins_losses_draws_and_sets():
+    # 1試合目 A・B vs C・D: 6-3, 4-6 → セット1-1で引分
+    # 2試合目 A・C vs B・D: 6-2 → A・Cの勝ち
+    history = [
+        {"team_a": ("A", "B"), "team_b": ("C", "D"), "sets": [(6, 3), (4, 6)]},
+        {"team_a": ("A", "C"), "team_b": ("B", "D"), "sets": [(6, 2)]},
+    ]
+    summary = player_summary(["A", "B", "C", "D", "E"], history)
+
+    a = summary["A"]
+    assert (a["wins"], a["losses"], a["draws"]) == (1, 0, 1)
+    assert (a["sets_won"], a["sets_lost"], a["set_diff"]) == (2, 1, 1)
+    # 勝率は 勝ち÷試合数(引分は勝ちに数えない) = 1/2
+    assert a["win_rate"] == pytest.approx(0.5)
+
+    d = summary["D"]
+    assert (d["wins"], d["losses"], d["draws"]) == (0, 1, 1)
+    assert (d["sets_won"], d["sets_lost"], d["set_diff"]) == (1, 2, -1)
+
+    e = summary["E"]  # 一度も出ていない
+    assert (e["matches_played"], e["wins"], e["sets_won"]) == (0, 0, 0)

@@ -4,6 +4,7 @@
 - is_valid_set: 境界値分析(妥当な境界のすぐ内側/すぐ外側)
 - parse_set_token: 同値クラス(valid / corrected / rejected-format / rejected-value)
 - classify_line: 複数セットにまたがる集約ロジックの組み合わせ・優先順位
+- classify_sets: 数字選択入力(スマホ画面)向け。同値クラス(全セット妥当/未選択/存在しないスコア/空)
 - input_matches_from_csv: 既存サンプルCSVでの回帰確認
 """
 
@@ -13,6 +14,8 @@ import pytest
 
 from tennis_stats import (
     classify_line,
+    classify_sets,
+    match_result,
     input_matches_from_csv,
     is_valid_set,
     parse_set_token,
@@ -149,6 +152,42 @@ def test_classify_line_rejected_before_corrected_still_rejects():
     assert result["sets"] == []
 
 
+# --- classify_sets: 同値クラス ------------------------------------------
+# 1セットの妥当性はis_valid_setで境界値分析済みなので、ここでは
+# 「試合全体としての集約(1つでもダメなら全体却下)」と「未選択の扱い」を確認する
+
+def test_classify_sets_all_valid():
+    result = classify_sets([(6, 3), (4, 6), (7, 6)])
+    assert result == {"status": "valid", "sets": [(6, 3), (4, 6), (7, 6)], "notes": []}
+
+
+def test_classify_sets_unselected_rejects_whole_match():
+    # 第2セットの「相手」側を選び忘れた
+    result = classify_sets([(6, 3), (4, None)])
+    assert result["status"] == "rejected"
+    assert result["sets"] == []
+    assert result["notes"] == ["第2セットのスコアが選択されていません"]
+
+
+def test_classify_sets_invalid_score_rejects_whole_match():
+    # 6-5は数字としては選べるが、テニスのセットとしては存在しない
+    result = classify_sets([(6, 5), (6, 2)])
+    assert result["status"] == "rejected"
+    assert result["sets"] == []
+    assert result["notes"] == ["第1セットは存在しないセットスコアです: '6-5'"]
+
+
+def test_classify_sets_reports_every_bad_set():
+    # 問題のあるセットが複数あれば、すべて一度に知らせる(何度も直させない)
+    result = classify_sets([(None, None), (6, 6)])
+    assert len(result["notes"]) == 2
+
+
+def test_classify_sets_empty():
+    result = classify_sets([])
+    assert result["status"] == "rejected"
+
+
 # --- input_matches_from_csv: 既存サンプルCSVでの回帰確認 -----------------
 
 def test_input_matches_from_csv_clean_sample_has_no_logs():
@@ -165,3 +204,15 @@ def test_input_matches_from_csv_dirty_sample_separates_corrected_and_rejected():
     # rejectedにされた行は集計(matches)に含まれていないことを確認
     assert len(matches) + len(rejected_log) == sum(1 for _ in open(
         DATA_DIR / "sample_matches_dirty.csv", encoding="utf-8-sig")) - 1  # ヘッダー分を引く
+
+
+# --- match_result: 勝ち/負け/引分の3つの同値クラス -----------------------------
+
+@pytest.mark.parametrize("sets, expected", [
+    ([(6, 3), (6, 4)], "win"),
+    ([(3, 6), (6, 4), (2, 6)], "loss"),
+    ([(6, 3), (4, 6)], "draw"),   # 2セットマッチで1-1
+    ([(6, 3)], "win"),            # 1セットマッチ
+])
+def test_match_result(sets, expected):
+    assert match_result({"opponent": "X", "sets": sets}) == expected

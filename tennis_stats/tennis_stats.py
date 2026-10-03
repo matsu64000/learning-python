@@ -88,6 +88,29 @@ def classify_line(line):
     return {"status": overall, "sets": sets, "notes": notes}
 
 
+def classify_sets(sets):
+    """数字で選択済みの(own, opp)の並びを、classify_lineと同じ形で検証・分類する。
+
+    スマホ画面のように文字ではなく数字を選んで入力する場合は、表記ゆれ
+    （全角数字・ダッシュ記号）が起こり得ないので "corrected" にはならない。
+    未選択のセットは None で渡される想定で、1つでもあれば試合全体を却下する。
+    1セット分の妥当性判定はclassify_lineと同じis_valid_setを使う（判定の共通化）。
+    """
+    notes = []
+    for i, (own, opp) in enumerate(sets, start=1):
+        if own is None or opp is None:
+            notes.append(f"第{i}セットのスコアが選択されていません")
+        elif not is_valid_set(own, opp):
+            notes.append(f"第{i}セットは存在しないセットスコアです: '{own}-{opp}'")
+
+    if not sets:
+        notes.append("セットが1つもありません")
+
+    if notes:
+        return {"status": "rejected", "sets": [], "notes": notes}
+    return {"status": "valid", "sets": list(sets), "notes": []}
+
+
 def input_matches():
     """キーボードから対話的に試合結果を読み込む。
 
@@ -177,7 +200,8 @@ def input_matches_from_csv(filepath):
         return matches_from_csv_rows(reader)
 
 
-def did_win(match):
+def set_counts(match):
+    """1試合の(取ったセット数, 落としたセット数)を返す"""
     sets_won = 0
     sets_lost = 0
     for own, opp in match["sets"]:
@@ -185,7 +209,25 @@ def did_win(match):
             sets_won += 1
         else:
             sets_lost += 1
-    return sets_won > sets_lost
+    return sets_won, sets_lost
+
+
+def match_result(match):
+    """1試合の結果を "win" / "loss" / "draw" で返す。
+
+    2セットマッチの1-1のように、取ったセット数と落としたセット数が同じなら引分。
+    (did_winは勝ちか否かの2値なので、引分も「勝ちではない」側に入ってしまう)
+    """
+    sets_won, sets_lost = set_counts(match)
+    if sets_won > sets_lost:
+        return "win"
+    if sets_won < sets_lost:
+        return "loss"
+    return "draw"
+
+
+def did_win(match):
+    return match_result(match) == "win"
 
 
 def win_rate(target_matches):
