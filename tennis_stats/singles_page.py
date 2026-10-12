@@ -31,8 +31,8 @@ from tennis_stats import (
     win_rate_by_opponent,
 )
 
-st.set_page_config(page_title="テニス試合結果集計", page_icon="🎾")
-st.title("🎾 テニス試合結果集計")
+st.set_page_config(page_title="シングルス集計 | てにろぐ君", page_icon="🎾")
+st.title("📊 シングルス集計")
 
 if "matches" not in st.session_state:
     st.session_state.matches = []

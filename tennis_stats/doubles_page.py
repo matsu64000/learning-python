@@ -31,7 +31,7 @@ from doubles import generate_matchup, join_offset, player_summary
 from score_input import format_selector, score_inputs
 from tennis_stats import MATCH_FORMATS, classify_sets
 
-st.set_page_config(page_title="ダブルス対戦", page_icon="🎾")
+st.set_page_config(page_title="ダブルス対戦 | てにろぐ君", page_icon="🎾")
 st.title("🎾 ダブルス対戦")
 
 if "doubles_players" not in st.session_state:

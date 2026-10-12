@@ -6,9 +6,15 @@
 # 以前はpages/フォルダに置いたファイルが自動でメニューになる方式だったが、
 # それだと最初の画面がapp.py(シングルス)に固定されるため、st.navigationで明示的に指定する
 #
+# 2026-10-12: アプリ名を「てにろぐ君」とし、ロゴ(assets/のSVG)と「このアプリの紹介」画面を追加
+#
 # 実行方法: streamlit run app.py
 
+from pathlib import Path
+
 import streamlit as st
+
+ASSETS = Path(__file__).parent / "assets"
 
 # ブラウザの自動翻訳を止める(2026-10-12)。Streamlitはページの言語を「英語(lang="en")」と
 # 宣言するため、スマホのChromeが英語のページと判断して日本語を「翻訳」し、
@@ -24,8 +30,12 @@ st.html(
     unsafe_allow_javascript=True,
 )
 
+# ロゴは全画面の左上に出る(サイドバーを閉じたとき・スマホでは小さいアイコン版)
+st.logo(str(ASSETS / "logo_wide.svg"), icon_image=str(ASSETS / "logo_icon.svg"), size="large")
+
 page = st.navigation([
     st.Page("doubles_page.py", title="ダブルス対戦", icon="🎾", default=True),
     st.Page("singles_page.py", title="シングルス集計", icon="📊"),
+    st.Page("intro_page.py", title="このアプリの紹介", icon="💡"),
 ])
 page.run()
