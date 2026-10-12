@@ -30,23 +30,47 @@ from itertools import combinations
 from tennis_stats import game_win_rate, match_result, set_counts, win_rate
 
 
-def matches_played_count(players, history):
-    """各プレイヤーのこれまでの対戦数(休みを除く)を数える。"""
-    counts = {p: 0 for p in players}
+def matches_played_count(players, history, offsets=None):
+    """各プレイヤーのこれまでの対戦数(休みを除く)を数える。
+
+    途中で抜けたメンバーは players に含まれないが、成績を残すため history には
+    残っている。そういう人の出場は数えずに読み飛ばす(2026-10-12追加)
+
+    offsets は途中から加わった人の「下駄」(join_offsetで計算)。出場順を決めるための
+    試合数にだけ足し、個人成績の試合数(player_summary)には影響しない
+    """
+    offsets = offsets or {}
+    counts = {p: offsets.get(p, 0) for p in players}
     for round_ in history:
         for p in round_["team_a"] + round_["team_b"]:
-            counts[p] += 1
+            if p in counts:
+                counts[p] += 1
     return counts
 
 
-def candidate_groups(players, history):
+def join_offset(player, players, history, offsets=None):
+    """途中から加わる(または抜けた後に戻る) player の下駄を返す。
+
+    下駄を履かせた試合数が「今いるメンバーの中で最も少ない試合数」と同じになるようにする。
+    こうしないと「試合数が少ない人を優先」のルールにより、加わった人が他の人に
+    追いつくまで連続で出続けてしまう(2026-10-12、ユーザーと相談して「同じペース」に決定)
+    """
+    others = [p for p in players if p != player]
+    if not others:
+        return 0
+    counts = matches_played_count(others + [player], history, offsets)
+    own_actual = counts[player] - (offsets or {}).get(player, 0)
+    return max(0, min(counts[p] for p in others) - own_actual)
+
+
+def candidate_groups(players, history, offsets=None):
     """今回プレーする4人の候補(試合数の少ない人を優先した組)をすべて返す。
 
     例: 試合数が A=1,B=1,C=1,D=2,E=2,F=2 なら、A・B・Cは必ず出て、
     残り1人をD・E・Fから選ぶ → 候補は {A,B,C,D} {A,B,C,E} {A,B,C,F} の3通り。
     どの1人を選ぶかは、ペア・対戦相手の重複が少なくなるかで後から決める
     """
-    counts = matches_played_count(players, history)
+    counts = matches_played_count(players, history, offsets)
     threshold = sorted(counts.values())[3]  # 4番目に少ない試合数
     must_play = [p for p in players if counts[p] < threshold]
     tied = [p for p in players if counts[p] == threshold]
@@ -118,7 +142,7 @@ def _partitions_of_four(four_players):
     ]
 
 
-def generate_matchup(players, history, rng=random):
+def generate_matchup(players, history, rng=random, offsets=None):
     """次のダブルス対戦カードを1つ決める。
 
     1. candidate_groupsで試合数の少ない人を優先した4人組の候補を作る
@@ -137,7 +161,7 @@ def generate_matchup(players, history, rng=random):
     cards = card_history(history)
 
     scored = []
-    for group in candidate_groups(players, history):
+    for group in candidate_groups(players, history, offsets):
         for team_a, team_b in _partitions_of_four(group):
             scored.append((matchup_cost(team_a, team_b, pairs, opponents, cards), team_a, team_b))
 

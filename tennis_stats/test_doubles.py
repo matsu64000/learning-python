@@ -18,6 +18,7 @@ from doubles import (
     card_history,
     card_key,
     generate_matchup,
+    join_offset,
     matches_played_count,
     matchup_cost,
     opponent_counts,
@@ -324,3 +325,68 @@ def test_player_summary_wins_losses_draws_and_sets():
 
     e = summary["E"]  # 一度も出ていない
     assert (e["matches_played"], e["wins"], e["sets_won"]) == (0, 0, 0)
+
+
+# --- 途中で抜けたメンバー(2026-10-12追加) ----------------------------------------
+# 抜けた人は players から外れるが、成績を残すため history には残っている
+
+def test_matches_played_count_ignores_players_who_left():
+    history = [{"team_a": ("A", "E"), "team_b": ("B", "C"), "resting": ["D"], "sets": [(6, 4)]}]
+    assert matches_played_count(["A", "B", "C", "D"], history) == {"A": 1, "B": 1, "C": 1, "D": 0}
+
+
+def test_generate_matchup_after_player_left_uses_only_remaining_players():
+    rng = random.Random(0)
+    players = ["A", "B", "C", "D", "E"]
+    history = []
+    for _ in range(3):
+        m = generate_matchup(players, history, rng)
+        history.append({**m, "sets": [(6, 4)]})
+    remaining = ["A", "B", "C", "D"]  # Eが抜けた
+    for _ in range(5):
+        m = generate_matchup(remaining, history, rng)
+        assert set(m["team_a"]) | set(m["team_b"]) == set(remaining)
+        assert m["resting"] == []
+        history.append({**m, "sets": [(6, 4)]})
+
+
+def test_player_summary_keeps_record_of_player_who_left():
+    history = [{"team_a": ("A", "E"), "team_b": ("B", "C"), "resting": ["D"], "sets": [(6, 4)]}]
+    summary = player_summary(["A", "B", "C", "D", "E"], history)
+    assert summary["E"]["wins"] == 1
+
+
+# --- 途中から加わるメンバー(2026-10-12追加): 他の人と同じペースで出る ----------------
+
+def test_join_offset_new_player_matches_least_played():
+    history = [
+        {"team_a": ("A", "B"), "team_b": ("C", "D"), "resting": ["E"], "sets": [(6, 4)]},
+        {"team_a": ("A", "E"), "team_b": ("B", "C"), "resting": ["D"], "sets": [(6, 4)]},
+    ]
+    # 試合数 A=2,B=2,C=2,D=1,E=1。新しいFは最少の1とみなす
+    assert join_offset("F", ["A", "B", "C", "D", "E", "F"], history) == 1
+
+
+def test_join_offset_returning_player_keeps_actual_matches():
+    history = [{"team_a": ("A", "B"), "team_b": ("C", "D"), "resting": [], "sets": [(6, 4)]}] * 3
+    # Dは3試合出た後に抜けて戻った。他の人も3試合なので下駄は0
+    assert join_offset("D", ["A", "B", "C", "D"], history) == 0
+
+
+def test_new_player_does_not_play_every_round():
+    rng = random.Random(1)
+    players = ["A", "B", "C", "D", "E"]
+    history, offsets = [], {}
+    for _ in range(5):
+        history.append({**generate_matchup(players, history, rng, offsets), "sets": [(6, 4)]})
+    players.append("F")
+    offsets["F"] = join_offset("F", players, history, offsets)
+    f_rounds = 0
+    for _ in range(6):
+        m = generate_matchup(players, history, rng, offsets)
+        f_rounds += "F" in m["team_a"] + m["team_b"]
+        history.append({**m, "sets": [(6, 4)]})
+    # 6人で6試合 → 1人あたり平均4試合。下駄なしならFは6試合連続で出てしまう
+    assert f_rounds <= 5
+    counts = matches_played_count(players, history, offsets)
+    assert max(counts.values()) - min(counts.values()) <= 1
