@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from doubles import generate_matchup, player_summary
-from score_input import format_selector, score_inputs, set_count_selector
+from score_input import format_selector, score_inputs
 from tennis_stats import MATCH_FORMATS, classify_sets
 
 st.set_page_config(page_title="ダブルス対戦", page_icon="🎾")
@@ -84,10 +84,9 @@ if not st.session_state.doubles_finished:
         fmt = format_selector(key="doubles_format")
         submitted = False
         if fmt is not None:
-            set_count = set_count_selector(key="doubles_set_count")
             with st.form("score_form"):
                 sets = score_inputs(
-                    set_count, "・".join(matchup["team_a"]), "・".join(matchup["team_b"]),
+                    "・".join(matchup["team_a"]), "・".join(matchup["team_b"]),
                     # 試合ごとに別の key にして、前の試合の入力値を持ち越さない
                     key=f"doubles_{len(st.session_state.doubles_history)}", fmt=fmt,
                 )

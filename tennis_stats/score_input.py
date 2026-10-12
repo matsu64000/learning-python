@@ -67,25 +67,23 @@ def format_selector(key):
     return current
 
 
-def set_count_selector(key):
-    """何セット分の入力欄を出すかを選ぶ。フォームの外に置くこと
-    (フォーム内のウィジェットは「登録」を押すまで画面に反映されないため)"""
-    return st.radio(
-        "セット数", [1, 2, 3], horizontal=True, key=key,
-        format_func=lambda n: f"{n}セット",
-    )
-
-
-def score_inputs(set_count, own_label, opp_label, key, fmt):
-    """セット数分の入力欄を表示し、[(own, opp), ...]を返す。
+def score_inputs(own_label, opp_label, key, fmt):
+    """試合形式の最大セット数分の入力欄を表示し、[(own, opp), ...]を返す。
     未選択の欄は None のまま返す(classify_sets側で却下する)。
+    セット数は形式で決まる(3セットマッチは3セット分、他は1セット)ので、選択欄は出さない。
     選べるゲーム数は試合形式ごとの上限まで(1セットマッチなら0〜7、4ゲーム系なら0〜4)"""
+    set_count = MATCH_FORMATS[fmt]["max_sets"]
     game_options = list(range(MATCH_FORMATS[fmt]["max_games"] + 1))
     # 形式を変えたら選択肢が変わるので、key に形式を含めて入力欄を作り直す
     key = f"{key}_{fmt}"
     sets = []
     for i in range(set_count):
-        st.markdown(f"**第{i + 1}セット**")
+        if set_count == 1:
+            pass  # 1セットで固定の形式では「第1セット」の見出しは不要
+        elif i == 2:
+            st.markdown("**第3セット**(1-1のときだけ入力)")
+        else:
+            st.markdown(f"**第{i + 1}セット**")
         with st.container(horizontal=True, wrap=False):
             own = st.selectbox(
                 own_label, game_options, index=None, placeholder="選択",

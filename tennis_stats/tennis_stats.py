@@ -28,34 +28,45 @@ def normalize_score_text(text):
     return "".join(ch for ch in normalized if not ch.isspace())
 
 
-# 試合形式の定義。キー(CSVや画面内部で使う識別子)→ 画面表示名と、
-# 1セットで選べるゲーム数の上限(スマホの数字選択欄の選択肢に使う)。
+# 試合形式の定義。キー(CSVや画面内部で使う識別子)→
+#   label     : 画面表示名
+#   max_games : 1セットで選べるゲーム数の上限(スマホの数字選択欄の選択肢に使う)
+#   max_sets  : 最大セット数(3セットマッチだけ3、他は1セットで固定)
 # COBOLで言えば、判定ルールをIF文にベタ書きせず、形式コードで引くパラメータテーブル。
 MATCH_FORMATS = {
-    "one_set": {"label": "1セットマッチ", "max_games": 7},
-    "four_first": {"label": "4ゲーム先取", "max_games": 4},
-    "four_match": {"label": "4ゲームマッチ", "max_games": 4},
-    "free": {"label": "フリー", "max_games": 15},
+    "one_set": {"label": "1セットマッチ", "max_games": 7, "max_sets": 1},
+    "four_first": {"label": "4ゲーム先取", "max_games": 4, "max_sets": 1},
+    "four_match": {"label": "4ゲームマッチ", "max_games": 4, "max_sets": 1},
+    "free": {"label": "フリー", "max_games": 15, "max_sets": 1},
+    # アマチュアでは稀だが、汎用性のために残す(画面の選択肢では最後に並ぶ)
+    "three_set": {"label": "3セットマッチ", "max_games": 7, "max_sets": 3},
 }
-DEFAULT_FORMAT = "one_set"  # 形式を指定しない場合(形式導入前のCSVなど)はこれとみなす
+DEFAULT_FORMAT = "one_set"  # 1セット単位の判定で形式を指定しない場合はこれとみなす
+
+
+def guess_format(set_count):
+    """形式の指定がない試合(形式導入前のCSV・CLIの入力)の形式を、セット数から推定する。
+    1セットなら1セットマッチ、2セット以上なら3セットマッチ"""
+    return "one_set" if set_count <= 1 else "three_set"
 
 
 def format_from_text(text):
     """CSVの形式欄の値(キー "four_first" でも表示名 "4ゲーム先取" でも可)を形式キーに変換する。
-    空欄なら DEFAULT_FORMAT、どれにも当たらなければ None を返す"""
+    空欄なら None(セット数から推定する、の意味)。どれにも当たらなければ ValueError"""
     text = (text or "").strip()
     if text == "":
-        return DEFAULT_FORMAT
+        return None
     for key, spec in MATCH_FORMATS.items():
         if text in (key, spec["label"]):
             return key
-    return None
+    raise ValueError(f"未知の試合形式です: '{text}'")
 
 
 def is_valid_set(own, opp, fmt=DEFAULT_FORMAT):
     """テニスの1セットとして存在しうるスコアかどうかを、試合形式 fmt に従って判定する。
 
     - one_set    : 6ゲーム先取。6-0〜6-4、7-5、7-6(タイブレーク)
+    - three_set  : 1セットの中身は one_set と同じ(セット数の判定は check_set_count)
     - four_first : 4ゲーム先取。3-3の後はノーアドで1ゲーム勝負なので 4-0〜4-3
     - four_match : 合計4ゲームを必ず行う。2-2は引分
     - free       : 何ゲーム先取とも決めない。0-0(試合をしていない)以外は可
@@ -63,7 +74,7 @@ def is_valid_set(own, opp, fmt=DEFAULT_FORMAT):
     if own < 0 or opp < 0:
         return False
     hi, lo = max(own, opp), min(own, opp)
-    if fmt == "one_set":
+    if fmt in ("one_set", "three_set"):
         return (hi == 6 and lo <= 4) or (hi == 7 and lo in (5, 6))
     if fmt == "four_first":
         return hi == 4 and lo <= 3
@@ -98,16 +109,45 @@ def parse_set_token(token, fmt=DEFAULT_FORMAT):
     return "valid", own, opp, None
 
 
-def classify_line(line, fmt=DEFAULT_FORMAT):
+def check_set_count(sets, fmt):
+    """試合全体としてセット数が形式に合っているかを判定し、問題点のリストを返す(問題なしなら空)。
+    1セットごとのスコアが妥当であることを前提にする(is_valid_set で確認済みのもの)。
+
+    - 3セットマッチ以外 : 1セットで固定
+    - 3セットマッチ     : 2セット先取。2-0で終わったら第3セットは無く、1-1なら第3セットが必要
+    """
+    label = MATCH_FORMATS[fmt]["label"]
+    if MATCH_FORMATS[fmt]["max_sets"] == 1:
+        if len(sets) != 1:
+            return [f"{label}は1セットで入力してください({len(sets)}セットあります)"]
+        return []
+
+    if len(sets) < 2:
+        return [f"{label}は2セット以上必要です"]
+    if len(sets) > 3:
+        return [f"{label}は3セットまでです({len(sets)}セットあります)"]
+    won_first_two = sum(1 for own, opp in sets[:2] if own > opp)
+    if len(sets) == 2 and won_first_two == 1:
+        return ["1-1のため第3セットが必要です"]
+    if len(sets) == 3 and won_first_two != 1:
+        return ["2セット先取で勝敗が決まった後に第3セットがあります"]
+    return []
+
+
+def classify_line(line, fmt=None):
     """1行（1試合）分のスコアをまとめて検証・分類する。
 
     1セットでも却下（rejected）があれば、その試合全体を却下扱いとし
     （sets は空になる）、隔離レポート側でまとめて確認できるようにする。
+    fmt を省略した場合は、セット数から形式を推定する(guess_format)。
     """
+    tokens = line.split(",")
+    if fmt is None:
+        fmt = guess_format(len(tokens))
     sets = []
     notes = []
     overall = "valid"
-    for token in line.split(","):
+    for token in tokens:
         status, own, opp, note = parse_set_token(token, fmt)
         if note:
             notes.append(note)
@@ -118,20 +158,34 @@ def classify_line(line, fmt=DEFAULT_FORMAT):
         if status != "rejected":
             sets.append((own, opp))
 
+    if overall != "rejected":
+        count_notes = check_set_count(sets, fmt)
+        if count_notes:
+            notes.extend(count_notes)
+            overall = "rejected"
+
     if overall == "rejected":
         sets = []
 
     return {"status": overall, "sets": sets, "notes": notes}
 
 
-def classify_sets(sets, fmt=DEFAULT_FORMAT):
+def classify_sets(sets, fmt=None):
     """数字で選択済みの(own, opp)の並びを、classify_lineと同じ形で検証・分類する。
 
     スマホ画面のように文字ではなく数字を選んで入力する場合は、表記ゆれ
     （全角数字・ダッシュ記号）が起こり得ないので "corrected" にはならない。
     未選択のセットは None で渡される想定で、1つでもあれば試合全体を却下する。
     1セット分の妥当性判定はclassify_lineと同じis_valid_setを使う（判定の共通化）。
+
+    3セットマッチの画面では第3セットの欄が常に出ているので、末尾の「両方とも未選択」の
+    セットは入力されなかったものとして取り除いてから判定する。
     """
+    sets = list(sets)
+    while len(sets) > 1 and sets[-1] == (None, None):
+        sets.pop()
+    if fmt is None:
+        fmt = guess_format(len(sets))
     notes = []
     for i, (own, opp) in enumerate(sets, start=1):
         if own is None or opp is None:
@@ -142,9 +196,12 @@ def classify_sets(sets, fmt=DEFAULT_FORMAT):
     if not sets:
         notes.append("セットが1つもありません")
 
+    if not notes:
+        notes = check_set_count(sets, fmt)
+
     if notes:
         return {"status": "rejected", "sets": [], "notes": notes}
-    return {"status": "valid", "sets": list(sets), "notes": []}
+    return {"status": "valid", "sets": sets, "notes": []}
 
 
 def input_matches():
@@ -199,16 +256,19 @@ def matches_from_csv_rows(rows):
     rejected_log = []
 
     for row_no, row in enumerate(rows, start=2):  # 1行目はヘッダーなので2から
-        # format列は任意(形式導入前のCSVにはない)。無ければ1セットマッチとみなす
-        fmt = format_from_text(row.get("format"))
-        if fmt is None:
+        # format列は任意(形式導入前のCSVにはない)。無ければセット数から推定する
+        try:
+            fmt = format_from_text(row.get("format"))
+        except ValueError as e:
             rejected_log.append({
                 "row": row_no,
                 "opponent": row["opponent"],
                 "raw": row["sets"],
-                "notes": [f"未知の試合形式です: '{row.get('format')}'"],
+                "notes": [str(e)],
             })
             continue
+        if fmt is None:
+            fmt = guess_format(len(row["sets"].split(",")))
 
         result = classify_line(row["sets"], fmt)
 

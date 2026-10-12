@@ -20,7 +20,7 @@ import io
 import pandas as pd
 import streamlit as st
 
-from score_input import format_selector, score_inputs, set_count_selector
+from score_input import format_selector, score_inputs
 from tennis_stats import (
     MATCH_FORMATS,
     classify_sets,
@@ -62,10 +62,9 @@ if "flash" in st.session_state:
 fmt = format_selector(key="singles_format")
 submitted = False
 if fmt is not None:
-    set_count = set_count_selector(key="singles_set_count")
     with st.form("match_form"):
         opponent = st.text_input("対戦相手", key=f"singles_opponent_{form_no}")
-        sets = score_inputs(set_count, "自分", "相手", key=f"singles_{form_no}", fmt=fmt)
+        sets = score_inputs("自分", "相手", key=f"singles_{form_no}", fmt=fmt)
         submitted = st.form_submit_button("登録", type="primary", width="stretch")
 
 if submitted:

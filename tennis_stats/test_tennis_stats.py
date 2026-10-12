@@ -14,6 +14,7 @@ import pytest
 
 from tennis_stats import (
     classify_line,
+    check_set_count,
     classify_sets,
     format_from_text,
     match_result,
@@ -130,9 +131,9 @@ def test_classify_line_all_valid():
 
 
 def test_classify_line_corrected_upgrades_from_valid():
-    result = classify_line("６-３,4-6")
+    result = classify_line("６-３,6-4")
     assert result["status"] == "corrected"
-    assert result["sets"] == [(6, 3), (4, 6)]
+    assert result["sets"] == [(6, 3), (6, 4)]
 
 
 def test_classify_line_one_rejected_rejects_whole_match():
@@ -177,7 +178,7 @@ def test_classify_sets_invalid_score_rejects_whole_match():
     result = classify_sets([(6, 5), (6, 2)])
     assert result["status"] == "rejected"
     assert result["sets"] == []
-    assert result["notes"] == ["第1セットは1セットマッチでは存在しないセットスコアです: '6-5'"]
+    assert result["notes"] == ["第1セットは3セットマッチでは存在しないセットスコアです: '6-5'"]
 
 
 def test_classify_sets_reports_every_bad_set():
@@ -197,7 +198,11 @@ def test_input_matches_from_csv_clean_sample_has_no_logs():
     matches, corrected_log, rejected_log = input_matches_from_csv(DATA_DIR / "sample_matches.csv")
     assert len(matches) > 0
     assert corrected_log == []
-    assert rejected_log == []
+    # 10/12に3セットマッチの試合単位の判定を入れた結果、「6-1,6-4,5-7」(2-0で勝負が
+    # ついた後に第3セットがある)が却下されるようになった。サンプルは書き換えず、検知を確認する
+    assert [(r["opponent"], r["notes"]) for r in rejected_log] == [
+        ("シナー", ["2セット先取で勝敗が決まった後に第3セットがあります"]),
+    ]
 
 
 def test_input_matches_from_csv_dirty_sample_separates_corrected_and_rejected():
@@ -214,7 +219,7 @@ def test_input_matches_from_csv_dirty_sample_separates_corrected_and_rejected():
 @pytest.mark.parametrize("sets, expected", [
     ([(6, 3), (6, 4)], "win"),
     ([(3, 6), (6, 4), (2, 6)], "loss"),
-    ([(6, 3), (4, 6)], "draw"),   # 2セットマッチで1-1
+    ([(6, 3), (4, 6)], "draw"),   # 1-1(集計関数としては引分。入力時の判定では却下される)
     ([(6, 3)], "win"),            # 1セットマッチ
 ])
 def test_match_result(sets, expected):
@@ -283,28 +288,74 @@ def test_classify_sets_uses_format():
 
 
 @pytest.mark.parametrize("text, expected", [
-    ("", "one_set"),            # 形式導入前のCSV(列が空・無い)
-    (None, "one_set"),
+    ("", None),                 # 形式導入前のCSV(列が空・無い)→ セット数から推定
+    (None, None),
     ("four_first", "four_first"),
     ("4ゲームマッチ", "four_match"),  # 表示名でも受け付ける
     (" フリー ", "free"),
-    ("5ゲーム先取", None),
 ])
 def test_format_from_text(text, expected):
     assert format_from_text(text) == expected
+
+
+def test_format_from_text_unknown_raises():
+    with pytest.raises(ValueError):
+        format_from_text("5ゲーム先取")
+
+
+# --- セット数の判定(10/12追加): 3セットマッチ以外は1セット固定、3セットマッチは2セット先取 ---
+
+@pytest.mark.parametrize("sets, fmt, expected", [
+    ([(6, 4)], "one_set", []),
+    ([(6, 4), (6, 3)], "one_set", ["1セットマッチは1セットで入力してください(2セットあります)"]),
+    ([(2, 2), (3, 1)], "four_match", ["4ゲームマッチは1セットで入力してください(2セットあります)"]),
+    ([(6, 4), (6, 3)], "three_set", []),                 # 2-0
+    ([(6, 4), (3, 6), (7, 5)], "three_set", []),         # 1-1から第3セット
+    ([(6, 4)], "three_set", ["3セットマッチは2セット以上必要です"]),
+    ([(6, 4), (3, 6)], "three_set", ["1-1のため第3セットが必要です"]),
+    ([(6, 1), (6, 4), (5, 7)], "three_set", ["2セット先取で勝敗が決まった後に第3セットがあります"]),
+])
+def test_check_set_count(sets, fmt, expected):
+    assert check_set_count(sets, fmt) == expected
+
+
+def test_classify_sets_three_set_drops_blank_third_set():
+    # 画面では第3セットの欄が常に出ている。2-0なら空欄のままでよい
+    result = classify_sets([(6, 4), (6, 3), (None, None)], "three_set")
+    assert result == {"status": "valid", "sets": [(6, 4), (6, 3)], "notes": []}
+
+
+def test_classify_sets_three_set_requires_third_set_when_one_all():
+    result = classify_sets([(6, 4), (3, 6), (None, None)], "three_set")
+    assert result["notes"] == ["1-1のため第3セットが必要です"]
+
+
+def test_classify_sets_three_set_half_filled_third_set_is_unselected():
+    # 第3セットの片方だけ選んだ場合は「入力されなかった」とはみなさない
+    result = classify_sets([(6, 4), (3, 6), (6, None)], "three_set")
+    assert result["notes"] == ["第3セットのスコアが選択されていません"]
+
+
+def test_classify_line_guesses_format_from_set_count():
+    assert classify_line("6-4")["status"] == "valid"            # 1セットマッチ
+    assert classify_line("6-4,3-6,6-2")["status"] == "valid"    # 3セットマッチ
+    assert classify_line("6-4,3-6")["notes"] == ["1-1のため第3セットが必要です"]
 
 
 def test_matches_from_csv_rows_with_format_column():
     rows = [
         {"opponent": "A", "sets": "4-3", "format": "4ゲーム先取"},
         {"opponent": "B", "sets": "2-2", "format": "four_match"},
-        {"opponent": "C", "sets": "6-4"},                          # format列なし
+        {"opponent": "C", "sets": "6-4"},                          # format列なし→1セットマッチ
+        {"opponent": "F", "sets": "6-4,6-2"},                      # format列なし→3セットマッチ
+        {"opponent": "G", "sets": "6-4,6-2", "format": "3セットマッチ"},
         {"opponent": "D", "sets": "4-3", "format": ""},            # 空欄→1セットマッチで却下
         {"opponent": "E", "sets": "6-4", "format": "謎の形式"},
     ]
     matches, corrected, rejected = matches_from_csv_rows(rows)
     assert [(m["opponent"], m["format"]) for m in matches] == [
         ("A", "four_first"), ("B", "four_match"), ("C", "one_set"),
+        ("F", "three_set"), ("G", "three_set"),
     ]
     assert [r["opponent"] for r in rejected] == ["D", "E"]
     assert rejected[1]["notes"] == ["未知の試合形式です: '謎の形式'"]
