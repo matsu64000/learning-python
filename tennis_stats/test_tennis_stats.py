@@ -15,7 +15,10 @@ import pytest
 from tennis_stats import (
     classify_line,
     classify_sets,
+    format_from_text,
     match_result,
+    matches_from_csv_rows,
+    set_counts,
     input_matches_from_csv,
     is_valid_set,
     parse_set_token,
@@ -174,7 +177,7 @@ def test_classify_sets_invalid_score_rejects_whole_match():
     result = classify_sets([(6, 5), (6, 2)])
     assert result["status"] == "rejected"
     assert result["sets"] == []
-    assert result["notes"] == ["第1セットは存在しないセットスコアです: '6-5'"]
+    assert result["notes"] == ["第1セットは1セットマッチでは存在しないセットスコアです: '6-5'"]
 
 
 def test_classify_sets_reports_every_bad_set():
@@ -216,3 +219,92 @@ def test_input_matches_from_csv_dirty_sample_separates_corrected_and_rejected():
 ])
 def test_match_result(sets, expected):
     assert match_result({"opponent": "X", "sets": sets}) == expected
+
+
+# --- 試合形式(2026-10-12追加): 形式ごとの境界値分析 ---------------------------
+# 形式を指定しない呼び出しは従来通り1セットマッチ扱い(上の既存テストがそのまま回帰確認になる)
+
+@pytest.mark.parametrize("own, opp, expected", [
+    # 4ゲーム先取: 4-0〜4-3が妥当。3-3の後はノーアドで4-3決着なので5-3や4-4は無い
+    (4, 0, True), (4, 3, True), (3, 4, True),
+    (3, 3, False),   # 決着していない
+    (4, 4, False),   # 4-3で終わるので存在しない
+    (5, 3, False),   # 2ゲーム差まで延長はしない
+    (6, 4, False),   # 6ゲーム先取のスコア
+])
+def test_is_valid_set_four_first(own, opp, expected):
+    assert is_valid_set(own, opp, "four_first") is expected
+
+
+@pytest.mark.parametrize("own, opp, expected", [
+    # 4ゲームマッチ: 合計がちょうど4ゲーム
+    (4, 0, True), (3, 1, True), (2, 2, True), (0, 4, True),
+    (3, 0, False),   # 合計3(すぐ内側の外れ)
+    (3, 2, False),   # 合計5(すぐ外側の外れ)
+])
+def test_is_valid_set_four_match(own, opp, expected):
+    assert is_valid_set(own, opp, "four_match") is expected
+
+
+@pytest.mark.parametrize("own, opp, expected", [
+    # フリー: 0-0以外は何でも可。引分(3-3)や大差(10-2)もあり得る
+    (1, 0, True), (3, 3, True), (10, 2, True),
+    (0, 0, False),
+    (-1, 2, False),
+])
+def test_is_valid_set_free(own, opp, expected):
+    assert is_valid_set(own, opp, "free") is expected
+
+
+def test_is_valid_set_unknown_format_raises():
+    with pytest.raises(ValueError):
+        is_valid_set(6, 4, "five_first")
+
+
+def test_four_match_two_all_is_draw():
+    # 2-2のセットは取ったセットにも落としたセットにも数えない → 0-0で引分
+    match = {"opponent": "A", "sets": [(2, 2)]}
+    assert set_counts(match) == (0, 0)
+    assert match_result(match) == "draw"
+
+
+def test_draw_set_is_not_counted_as_lost_in_multi_set_match():
+    # 2-2 を「落としたセット」に数えると 1-1 の引分になってしまう(10/12に修正したバグ)
+    match = {"opponent": "A", "sets": [(3, 1), (2, 2)]}
+    assert set_counts(match) == (1, 0)
+    assert match_result(match) == "win"
+
+
+def test_classify_sets_uses_format():
+    assert classify_sets([(4, 3)], "four_first")["status"] == "valid"
+    result = classify_sets([(4, 3)])  # 1セットマッチでは存在しない
+    assert result["status"] == "rejected"
+    assert result["notes"] == ["第1セットは1セットマッチでは存在しないセットスコアです: '4-3'"]
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("", "one_set"),            # 形式導入前のCSV(列が空・無い)
+    (None, "one_set"),
+    ("four_first", "four_first"),
+    ("4ゲームマッチ", "four_match"),  # 表示名でも受け付ける
+    (" フリー ", "free"),
+    ("5ゲーム先取", None),
+])
+def test_format_from_text(text, expected):
+    assert format_from_text(text) == expected
+
+
+def test_matches_from_csv_rows_with_format_column():
+    rows = [
+        {"opponent": "A", "sets": "4-3", "format": "4ゲーム先取"},
+        {"opponent": "B", "sets": "2-2", "format": "four_match"},
+        {"opponent": "C", "sets": "6-4"},                          # format列なし
+        {"opponent": "D", "sets": "4-3", "format": ""},            # 空欄→1セットマッチで却下
+        {"opponent": "E", "sets": "6-4", "format": "謎の形式"},
+    ]
+    matches, corrected, rejected = matches_from_csv_rows(rows)
+    assert [(m["opponent"], m["format"]) for m in matches] == [
+        ("A", "four_first"), ("B", "four_match"), ("C", "one_set"),
+    ]
+    assert [r["opponent"] for r in rejected] == ["D", "E"]
+    assert rejected[1]["notes"] == ["未知の試合形式です: '謎の形式'"]

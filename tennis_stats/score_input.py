@@ -18,10 +18,53 @@
 #
 # 入力値の妥当性判定はここでは行わず、tennis_stats.classify_setsに任せる
 # (画面部品と判定ロジックの分離)
+#
+# 【試合形式(2026-10-12追加)】
+# 最初に1回だけ形式を選び、以降の試合はその形式を引き継ぐ。途中で形式が変わったときだけ
+# 「試合形式を変更」を押して選び直す(何度でも可)。形式は1試合ごとに記録する。
 
 import streamlit as st
 
-GAME_OPTIONS = list(range(8))  # 1セットのゲーム数として選べる値(0〜7)
+from tennis_stats import MATCH_FORMATS
+
+
+def _format_label(fmt):
+    return MATCH_FORMATS[fmt]["label"]
+
+
+def format_selector(key):
+    """現在の試合形式を返す。まだ決まっていない(または変更中の)ときは選択画面を出して None を返す。
+    呼び出し側は None の間はスコア入力欄を出さないこと。
+
+    st.session_state[key] に決定済みの形式、[key + "_editing"] に「変更中か」を保持する
+    """
+    editing_key = f"{key}_editing"
+    current = st.session_state.get(key)
+
+    if current is None or st.session_state.get(editing_key):
+        st.markdown("**試合形式を選んでください**" if current is None
+                    else "**新しい試合形式を選んでください**")
+        options = list(MATCH_FORMATS)
+        choice = st.radio(
+            "試合形式", options, format_func=_format_label, label_visibility="collapsed",
+            index=options.index(current) if current else 0, key=f"{key}_choice",
+        )
+        with st.container(horizontal=True):
+            if st.button("この形式で決定", type="primary", key=f"{key}_ok"):
+                st.session_state[key] = choice
+                st.session_state[editing_key] = False
+                st.rerun()
+            if current is not None and st.button("取り消し", key=f"{key}_cancel"):
+                st.session_state[editing_key] = False
+                st.rerun()
+        return None
+
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.markdown(f"試合形式: **{_format_label(current)}**")
+        if st.button("試合形式を変更", key=f"{key}_change"):
+            st.session_state[editing_key] = True
+            st.rerun()
+    return current
 
 
 def set_count_selector(key):
@@ -33,19 +76,23 @@ def set_count_selector(key):
     )
 
 
-def score_inputs(set_count, own_label, opp_label, key):
+def score_inputs(set_count, own_label, opp_label, key, fmt):
     """セット数分の入力欄を表示し、[(own, opp), ...]を返す。
-    未選択の欄は None のまま返す(classify_sets側で却下する)"""
+    未選択の欄は None のまま返す(classify_sets側で却下する)。
+    選べるゲーム数は試合形式ごとの上限まで(1セットマッチなら0〜7、4ゲーム系なら0〜4)"""
+    game_options = list(range(MATCH_FORMATS[fmt]["max_games"] + 1))
+    # 形式を変えたら選択肢が変わるので、key に形式を含めて入力欄を作り直す
+    key = f"{key}_{fmt}"
     sets = []
     for i in range(set_count):
         st.markdown(f"**第{i + 1}セット**")
         with st.container(horizontal=True, wrap=False):
             own = st.selectbox(
-                own_label, GAME_OPTIONS, index=None, placeholder="選択",
+                own_label, game_options, index=None, placeholder="選択",
                 filter_mode=None, key=f"{key}_own_{i}",
             )
             opp = st.selectbox(
-                opp_label, GAME_OPTIONS, index=None, placeholder="選択",
+                opp_label, game_options, index=None, placeholder="選択",
                 filter_mode=None, key=f"{key}_opp_{i}",
             )
         sets.append((own, opp))

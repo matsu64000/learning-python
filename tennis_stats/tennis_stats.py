@@ -28,17 +28,53 @@ def normalize_score_text(text):
     return "".join(ch for ch in normalized if not ch.isspace())
 
 
-def is_valid_set(own, opp):
-    """テニスの1セットとして存在しうるスコアかどうかを判定する"""
+# 試合形式の定義。キー(CSVや画面内部で使う識別子)→ 画面表示名と、
+# 1セットで選べるゲーム数の上限(スマホの数字選択欄の選択肢に使う)。
+# COBOLで言えば、判定ルールをIF文にベタ書きせず、形式コードで引くパラメータテーブル。
+MATCH_FORMATS = {
+    "one_set": {"label": "1セットマッチ", "max_games": 7},
+    "four_first": {"label": "4ゲーム先取", "max_games": 4},
+    "four_match": {"label": "4ゲームマッチ", "max_games": 4},
+    "free": {"label": "フリー", "max_games": 15},
+}
+DEFAULT_FORMAT = "one_set"  # 形式を指定しない場合(形式導入前のCSVなど)はこれとみなす
+
+
+def format_from_text(text):
+    """CSVの形式欄の値(キー "four_first" でも表示名 "4ゲーム先取" でも可)を形式キーに変換する。
+    空欄なら DEFAULT_FORMAT、どれにも当たらなければ None を返す"""
+    text = (text or "").strip()
+    if text == "":
+        return DEFAULT_FORMAT
+    for key, spec in MATCH_FORMATS.items():
+        if text in (key, spec["label"]):
+            return key
+    return None
+
+
+def is_valid_set(own, opp, fmt=DEFAULT_FORMAT):
+    """テニスの1セットとして存在しうるスコアかどうかを、試合形式 fmt に従って判定する。
+
+    - one_set    : 6ゲーム先取。6-0〜6-4、7-5、7-6(タイブレーク)
+    - four_first : 4ゲーム先取。3-3の後はノーアドで1ゲーム勝負なので 4-0〜4-3
+    - four_match : 合計4ゲームを必ず行う。2-2は引分
+    - free       : 何ゲーム先取とも決めない。0-0(試合をしていない)以外は可
+    """
+    if own < 0 or opp < 0:
+        return False
     hi, lo = max(own, opp), min(own, opp)
-    if hi == 6 and lo <= 4:
-        return True
-    if hi == 7 and lo in (5, 6):
-        return True
-    return False
+    if fmt == "one_set":
+        return (hi == 6 and lo <= 4) or (hi == 7 and lo in (5, 6))
+    if fmt == "four_first":
+        return hi == 4 and lo <= 3
+    if fmt == "four_match":
+        return own + opp == 4
+    if fmt == "free":
+        return hi > 0
+    raise ValueError(f"未知の試合形式です: {fmt}")
 
 
-def parse_set_token(token):
+def parse_set_token(token, fmt=DEFAULT_FORMAT):
     """1セット分のスコア文字列を検証・分類する。
 
     戻り値: (status, own, opp, note)
@@ -53,8 +89,8 @@ def parse_set_token(token):
     except ValueError:
         return "rejected", None, None, f"スコア形式として解釈できません: '{original}'"
 
-    if not is_valid_set(own, opp):
-        return "rejected", own, opp, f"存在しないセットスコアです: '{original}'"
+    if not is_valid_set(own, opp, fmt):
+        return "rejected", own, opp, f"{MATCH_FORMATS[fmt]['label']}では存在しないセットスコアです: '{original}'"
 
     if normalized != original:
         return "corrected", own, opp, f"表記を補正しました: '{original}' → '{normalized}'"
@@ -62,7 +98,7 @@ def parse_set_token(token):
     return "valid", own, opp, None
 
 
-def classify_line(line):
+def classify_line(line, fmt=DEFAULT_FORMAT):
     """1行（1試合）分のスコアをまとめて検証・分類する。
 
     1セットでも却下（rejected）があれば、その試合全体を却下扱いとし
@@ -72,7 +108,7 @@ def classify_line(line):
     notes = []
     overall = "valid"
     for token in line.split(","):
-        status, own, opp, note = parse_set_token(token)
+        status, own, opp, note = parse_set_token(token, fmt)
         if note:
             notes.append(note)
         if status == "rejected":
@@ -88,7 +124,7 @@ def classify_line(line):
     return {"status": overall, "sets": sets, "notes": notes}
 
 
-def classify_sets(sets):
+def classify_sets(sets, fmt=DEFAULT_FORMAT):
     """数字で選択済みの(own, opp)の並びを、classify_lineと同じ形で検証・分類する。
 
     スマホ画面のように文字ではなく数字を選んで入力する場合は、表記ゆれ
@@ -100,8 +136,8 @@ def classify_sets(sets):
     for i, (own, opp) in enumerate(sets, start=1):
         if own is None or opp is None:
             notes.append(f"第{i}セットのスコアが選択されていません")
-        elif not is_valid_set(own, opp):
-            notes.append(f"第{i}セットは存在しないセットスコアです: '{own}-{opp}'")
+        elif not is_valid_set(own, opp, fmt):
+            notes.append(f"第{i}セットは{MATCH_FORMATS[fmt]['label']}では存在しないセットスコアです: '{own}-{opp}'")
 
     if not sets:
         notes.append("セットが1つもありません")
@@ -163,7 +199,18 @@ def matches_from_csv_rows(rows):
     rejected_log = []
 
     for row_no, row in enumerate(rows, start=2):  # 1行目はヘッダーなので2から
-        result = classify_line(row["sets"])
+        # format列は任意(形式導入前のCSVにはない)。無ければ1セットマッチとみなす
+        fmt = format_from_text(row.get("format"))
+        if fmt is None:
+            rejected_log.append({
+                "row": row_no,
+                "opponent": row["opponent"],
+                "raw": row["sets"],
+                "notes": [f"未知の試合形式です: '{row.get('format')}'"],
+            })
+            continue
+
+        result = classify_line(row["sets"], fmt)
 
         if result["status"] == "rejected":
             rejected_log.append({
@@ -182,7 +229,7 @@ def matches_from_csv_rows(rows):
                 "notes": result["notes"],
             })
 
-        matches.append({"opponent": row["opponent"], "sets": result["sets"]})
+        matches.append({"opponent": row["opponent"], "sets": result["sets"], "format": fmt})
 
     return matches, corrected_log, rejected_log
 
@@ -201,13 +248,14 @@ def input_matches_from_csv(filepath):
 
 
 def set_counts(match):
-    """1試合の(取ったセット数, 落としたセット数)を返す"""
+    """1試合の(取ったセット数, 落としたセット数)を返す。
+    4ゲームマッチの2-2のような同点のセットは、どちらにも数えない"""
     sets_won = 0
     sets_lost = 0
     for own, opp in match["sets"]:
         if own > opp:
             sets_won += 1
-        else:
+        elif own < opp:
             sets_lost += 1
     return sets_won, sets_lost
 
@@ -215,7 +263,8 @@ def set_counts(match):
 def match_result(match):
     """1試合の結果を "win" / "loss" / "draw" で返す。
 
-    2セットマッチの1-1のように、取ったセット数と落としたセット数が同じなら引分。
+    2セットマッチの1-1や、4ゲームマッチの2-2(1セットのみ)のように、
+    取ったセット数と落としたセット数が同じなら引分。
     (did_winは勝ちか否かの2値なので、引分も「勝ちではない」側に入ってしまう)
     """
     sets_won, sets_lost = set_counts(match)

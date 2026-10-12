@@ -20,8 +20,9 @@ import io
 import pandas as pd
 import streamlit as st
 
-from score_input import score_inputs, set_count_selector
+from score_input import format_selector, score_inputs, set_count_selector
 from tennis_stats import (
+    MATCH_FORMATS,
     classify_sets,
     game_win_rate,
     match_result,
@@ -58,28 +59,32 @@ form_no = st.session_state.form_no
 if "flash" in st.session_state:
     st.success(st.session_state.pop("flash"))
 
-set_count = set_count_selector(key="singles_set_count")
-with st.form("match_form"):
-    opponent = st.text_input("対戦相手", key=f"singles_opponent_{form_no}")
-    sets = score_inputs(set_count, "自分", "相手", key=f"singles_{form_no}")
-    submitted = st.form_submit_button("登録", type="primary", width="stretch")
+fmt = format_selector(key="singles_format")
+submitted = False
+if fmt is not None:
+    set_count = set_count_selector(key="singles_set_count")
+    with st.form("match_form"):
+        opponent = st.text_input("対戦相手", key=f"singles_opponent_{form_no}")
+        sets = score_inputs(set_count, "自分", "相手", key=f"singles_{form_no}", fmt=fmt)
+        submitted = st.form_submit_button("登録", type="primary", width="stretch")
 
 if submitted:
     if not opponent:
         st.error("対戦相手を入力してください")
     else:
-        result = classify_sets(sets)
+        result = classify_sets(sets, fmt)
         if result["status"] == "rejected":
             st.error("登録できませんでした: " + "; ".join(result["notes"]))
         else:
-            st.session_state.matches.append({"opponent": opponent, "sets": result["sets"]})
+            st.session_state.matches.append(
+                {"opponent": opponent, "sets": result["sets"], "format": fmt})
             st.session_state.flash = f"{opponent} 戦を登録しました"
             st.session_state.form_no += 1
             st.rerun()
 
 # --- CSVからまとめて読み込み --------------------------------------------------
 st.header("CSVから読み込み")
-uploaded = st.file_uploader("opponent,sets列を持つCSVファイル", type="csv")
+uploaded = st.file_uploader("opponent,sets列(任意でformat列)を持つCSVファイル", type="csv")
 if uploaded is not None:
     text = uploaded.getvalue().decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
@@ -108,6 +113,7 @@ else:
     table = pd.DataFrame([
         {
             "対戦相手": m["opponent"],
+            "形式": MATCH_FORMATS[m.get("format", "one_set")]["label"],
             "セット結果": _sets_to_text(m["sets"]),
             "勝敗": RESULT_LABELS[match_result(m)],
         }
@@ -127,7 +133,8 @@ else:
 
     st.subheader("CSVとして保存")
     export_df = pd.DataFrame([
-        {"opponent": m["opponent"], "sets": _sets_to_text(m["sets"])}
+        {"opponent": m["opponent"], "sets": _sets_to_text(m["sets"]),
+         "format": MATCH_FORMATS[m.get("format", "one_set")]["label"]}
         for m in st.session_state.matches
     ])
     st.download_button(

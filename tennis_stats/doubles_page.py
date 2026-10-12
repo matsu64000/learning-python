@@ -16,8 +16,8 @@ import pandas as pd
 import streamlit as st
 
 from doubles import generate_matchup, player_summary
-from score_input import score_inputs, set_count_selector
-from tennis_stats import classify_sets
+from score_input import format_selector, score_inputs, set_count_selector
+from tennis_stats import MATCH_FORMATS, classify_sets
 
 st.set_page_config(page_title="ダブルス対戦", page_icon="🎾")
 st.title("🎾 ダブルス対戦")
@@ -81,19 +81,22 @@ if not st.session_state.doubles_finished:
         if matchup["resting"]:
             st.caption("休み: " + "、".join(matchup["resting"]))
 
-        set_count = set_count_selector(key="doubles_set_count")
-        with st.form("score_form"):
-            sets = score_inputs(
-                set_count, "・".join(matchup["team_a"]), "・".join(matchup["team_b"]),
-                # 試合ごとに別の key にして、前の試合の入力値を持ち越さない
-                key=f"doubles_{len(st.session_state.doubles_history)}",
-            )
-            submitted = st.form_submit_button(
-                "結果を登録して次の試合へ", type="primary", width="stretch",
-            )
+        fmt = format_selector(key="doubles_format")
+        submitted = False
+        if fmt is not None:
+            set_count = set_count_selector(key="doubles_set_count")
+            with st.form("score_form"):
+                sets = score_inputs(
+                    set_count, "・".join(matchup["team_a"]), "・".join(matchup["team_b"]),
+                    # 試合ごとに別の key にして、前の試合の入力値を持ち越さない
+                    key=f"doubles_{len(st.session_state.doubles_history)}", fmt=fmt,
+                )
+                submitted = st.form_submit_button(
+                    "結果を登録して次の試合へ", type="primary", width="stretch",
+                )
 
         if submitted:
-            result = classify_sets(sets)
+            result = classify_sets(sets, fmt)
             if result["status"] == "rejected":
                 st.error("登録できませんでした: " + "; ".join(result["notes"]))
             else:
@@ -102,6 +105,7 @@ if not st.session_state.doubles_finished:
                     "team_b": matchup["team_b"],
                     "resting": matchup["resting"],
                     "sets": result["sets"],
+                    "format": fmt,
                 })
                 _next_matchup()
                 st.rerun()
@@ -146,7 +150,8 @@ if st.session_state.doubles_history:
         for i, r in enumerate(st.session_state.doubles_history, start=1):
             sets_text = ",".join(f"{a}-{b}" for a, b in r["sets"])
             resting_note = f"（休み: {'、'.join(r['resting'])}）" if r["resting"] else ""
-            st.write(f"第{i}試合: {'・'.join(r['team_a'])} vs {'・'.join(r['team_b'])} "
+            fmt_label = MATCH_FORMATS[r.get("format", "one_set")]["label"]
+            st.write(f"第{i}試合 [{fmt_label}]: {'・'.join(r['team_a'])} vs {'・'.join(r['team_b'])} "
                       f"→ {sets_text}{resting_note}")
 
 if st.session_state.doubles_players:
@@ -156,4 +161,5 @@ if st.session_state.doubles_players:
         st.session_state.doubles_history = []
         st.session_state.doubles_current = None
         st.session_state.doubles_finished = False
+        st.session_state.doubles_format = None
         st.rerun()
