@@ -121,14 +121,14 @@ elif not st.session_state.doubles_finished:
     if st.session_state.doubles_left:
         st.caption("途中で抜けたメンバ: " + "、".join(st.session_state.doubles_left))
 
-    # 「抜ける」「加わる」は、押したほうの入力欄だけを開く
+    # 「抜ける」「追加する」は、押したほうの入力欄だけを開く
     mode = st.session_state.get("doubles_member_mode")
     if mode is None:
         with st.container(horizontal=True):
             if st.button("抜けるメンバがいる場合"):
                 st.session_state.doubles_member_mode = "leave"
                 st.rerun()
-            if st.button("加わるメンバがいる場合"):
+            if st.button("メンバを追加する場合"):
                 st.session_state.doubles_member_mode = "join"
                 st.rerun()
     elif mode == "leave":
@@ -139,10 +139,10 @@ elif not st.session_state.doubles_finished:
         if st.session_state.doubles_history:
             st.caption("抜けたメンバのここまでの成績と対戦履歴は残ります")
         with st.container(horizontal=True):
-            if st.button("このメンバを抜く", type="primary", disabled=leaving is None):
+            if st.button("以降の試合でこのメンバを外す", type="primary", disabled=leaving is None):
                 _remove_player(leaving)
                 st.session_state.doubles_member_mode = None
-                st.session_state.doubles_flash = f"{leaving} さんが抜けました"
+                st.session_state.doubles_flash = f"{leaving} さんを以降の試合から外しました"
                 st.rerun()
             if st.button("やめる"):
                 st.session_state.doubles_member_mode = None
@@ -150,16 +150,16 @@ elif not st.session_state.doubles_finished:
     else:  # join
         if st.session_state.doubles_left:
             st.caption("抜けたメンバが戻る場合は、同じ名前で入力すると成績を引き継ぎます")
-        joining = st.text_input("加わるメンバの名前")
+        joining = st.text_input("追加するメンバの名前")
         with st.container(horizontal=True):
-            if st.button("このメンバを加える", type="primary"):
+            if st.button("このメンバを追加する", type="primary"):
                 error = _name_error(joining)
                 if error:
                     st.error(error)
                 else:
                     _add_player_midway(joining)
                     st.session_state.doubles_member_mode = None
-                    st.session_state.doubles_flash = f"{joining} さんが加わりました"
+                    st.session_state.doubles_flash = f"{joining} さんを追加しました"
                     st.rerun()
             if st.button("やめる"):
                 st.session_state.doubles_member_mode = None

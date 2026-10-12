@@ -253,7 +253,7 @@ def test_is_valid_set_four_match(own, opp, expected):
 
 @pytest.mark.parametrize("own, opp, expected", [
     # フリー: 0-0以外は何でも可。引分(3-3)や大差(10-2)もあり得る
-    (1, 0, True), (3, 3, True), (10, 2, True),
+    (1, 0, True), (3, 1, True), (3, 3, True), (10, 2, True), (10, 7, True), (12, 10, True),
     (0, 0, False),
     (-1, 2, False),
 ])

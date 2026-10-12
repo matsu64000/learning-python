@@ -10,6 +10,20 @@
 
 import streamlit as st
 
+# ブラウザの自動翻訳を止める(2026-10-12)。Streamlitはページの言語を「英語(lang="en")」と
+# 宣言するため、スマホのChromeが英語のページと判断して日本語を「翻訳」し、
+# 「抜く」→「抜け出す」、「フリー」→「自由な」のように文言が崩れていた。
+# ページの言語を日本語にし、翻訳しない印(translate="no")を付ける
+st.html(
+    """<script>
+    const root = window.parent.document.documentElement;
+    root.lang = "ja";
+    root.setAttribute("translate", "no");
+    root.classList.add("notranslate");
+    </script>""",
+    unsafe_allow_javascript=True,
+)
+
 page = st.navigation([
     st.Page("doubles_page.py", title="ダブルス対戦", icon="🎾", default=True),
     st.Page("singles_page.py", title="シングルス集計", icon="📊"),

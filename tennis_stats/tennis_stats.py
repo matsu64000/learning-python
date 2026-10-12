@@ -37,7 +37,7 @@ MATCH_FORMATS = {
     "one_set": {"label": "1セットマッチ", "max_games": 7, "max_sets": 1},
     "four_first": {"label": "4ゲーム先取", "max_games": 4, "max_sets": 1},
     "four_match": {"label": "4ゲームマッチ", "max_games": 4, "max_sets": 1},
-    "free": {"label": "フリー", "max_games": 15, "max_sets": 1},
+    "free": {"label": "フリー", "max_games": 20, "max_sets": 1},
     # アマチュアでは稀だが、汎用性のために残す(画面の選択肢では最後に並ぶ)
     "three_set": {"label": "3セットマッチ", "max_games": 7, "max_sets": 3},
 }
@@ -69,7 +69,8 @@ def is_valid_set(own, opp, fmt=DEFAULT_FORMAT):
     - three_set  : 1セットの中身は one_set と同じ(セット数の判定は check_set_count)
     - four_first : 4ゲーム先取。3-3の後はノーアドで1ゲーム勝負なので 4-0〜4-3
     - four_match : 合計4ゲームを必ず行う。2-2は引分
-    - free       : 何ゲーム先取とも決めない。0-0(試合をしていない)以外は可
+    - free       : 何ゲーム先取とも決めない。0-0(試合をしていない)以外は可。
+                   3-1、3-3(引分)、10-7(10ポイントタイブレークで決着する場合など)もあり得る
     """
     if own < 0 or opp < 0:
         return False
