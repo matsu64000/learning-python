@@ -67,6 +67,21 @@ def format_selector(key):
     return current
 
 
+def _score_key(key, fmt, side, i):
+    # 形式を変えたら選択肢が変わるので、key に形式を含めて入力欄を作り直す
+    return f"{key}_{fmt}_{side}_{i}"
+
+
+def read_scores(key, fmt):
+    """score_inputs で入力された値を session_state から読み出す。
+    ボタンの on_click(画面を描き直す前に呼ばれる)の中で、入力した時点の欄の値を読むために使う"""
+    return [
+        (st.session_state.get(_score_key(key, fmt, "own", i)),
+         st.session_state.get(_score_key(key, fmt, "opp", i)))
+        for i in range(MATCH_FORMATS[fmt]["max_sets"])
+    ]
+
+
 def score_inputs(own_label, opp_label, key, fmt):
     """試合形式の最大セット数分の入力欄を表示し、[(own, opp), ...]を返す。
     未選択の欄は None のまま返す(classify_sets側で却下する)。
@@ -74,8 +89,6 @@ def score_inputs(own_label, opp_label, key, fmt):
     選べるゲーム数は試合形式ごとの上限まで(1セットマッチなら0〜7、4ゲーム系なら0〜4)"""
     set_count = MATCH_FORMATS[fmt]["max_sets"]
     game_options = list(range(MATCH_FORMATS[fmt]["max_games"] + 1))
-    # 形式を変えたら選択肢が変わるので、key に形式を含めて入力欄を作り直す
-    key = f"{key}_{fmt}"
     sets = []
     for i in range(set_count):
         if set_count == 1:
@@ -87,11 +100,11 @@ def score_inputs(own_label, opp_label, key, fmt):
         with st.container(horizontal=True, wrap=False):
             own = st.selectbox(
                 own_label, game_options, index=None, placeholder="選択",
-                filter_mode=None, key=f"{key}_own_{i}",
+                filter_mode=None, key=_score_key(key, fmt, "own", i),
             )
             opp = st.selectbox(
                 opp_label, game_options, index=None, placeholder="選択",
-                filter_mode=None, key=f"{key}_opp_{i}",
+                filter_mode=None, key=_score_key(key, fmt, "opp", i),
             )
         sets.append((own, opp))
     return sets

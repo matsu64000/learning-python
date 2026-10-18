@@ -7,3 +7,6 @@ image_practice/similarity_samples/
 audio_practice/fft_output/
 weather_practice/output/
 sakura_practice/output/
+
+# Streamlitの合言葉など秘密の設定(GitHubに載せない)
+**/.streamlit/secrets.toml
